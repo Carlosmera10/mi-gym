@@ -640,7 +640,7 @@ const FEEL_TXT={easy:'Fácil',good:'Bien',hard:'Al límite'}, FEEL_IC={easy:'lau
 const PAIN={lumbar:'Lumbar',hombro:'Hombro',rodilla:'Rodilla',codo:'Codo o muñeca',cuello:'Cuello',otra:'Otra'};
 const SEED_ABBR={'rt:piernas':'P','rt:torso':'TH','rt:fullbody':'FB','rt:comba':'CC','rt:sinimpacto':'SI'};
 const MODES=[{k:'full',t:'Completa',p:['E','I','P']},{k:'45',t:'45 min',p:['E','I']},{k:'30',t:'30 min',p:['E']}];
-const TOAST_ICON={'🏆':'trophy','📌':'pin','📝':'note','📁':'folder','➕':'plus','🗑️':'trash','✅':'check-circle','🔁':'repeat','💾':'save','📥':'download','📤':'upload','↩️':'undo','📲':'monitor-down','📅':'calendar','📦':'archive','⏱️':'timer','🏋️':'dumbbell','⚠️':'alert','✏️':'pencil','⧉':'copy','⇄':'swap'};
+const TOAST_ICON={'🏆':'trophy','📌':'pin','📝':'note','📁':'folder','➕':'plus','🗑️':'trash','✅':'check-circle','🔁':'repeat','💾':'save','📥':'download','📤':'upload','↩️':'undo','📲':'monitor-down','📅':'calendar','📦':'archive','⏱️':'timer','🏋️':'dumbbell','⚠️':'alert','✏️':'pencil','⧉':'copy','⇄':'swap','⚖️':'trend'};
 
 /* ================= Utilidades ================= */
 const $=id=>document.getElementById(id);
@@ -741,6 +741,7 @@ function normalizeExercise(e){
     note:str(e.note,600),
     tech:normalizeTech(e.tech),
     hevy:strList(e.hevy,20),
+    stepKg:(()=>{ const v=parseNum(e.stepKg); return v>0&&v<=50?Math.round(v*1000)/1000:null; })(),
     archived:e.archived===true,
     updatedAt:validIso(e.updatedAt)?e.updatedAt:''
   };
@@ -1208,11 +1209,54 @@ function lastBefore(exId,s){ return exHistory(exId).find(h=>h.s.id!==s.id&&h.s.s
    kind: up (subir peso) · up-reps (mismo peso, más reps) · same (repetir) · down (bajar) · pain (molestia) */
 const KIND_DIR={up:'up','up-reps':'same',same:'same',down:'down',pain:'down'};
 const stepFor=unit=>unit==='lb'?appState.settings.lbStep:appState.settings.kgStep;
-function shiftKg(kg,unit,dir){
-  const cur=toUnit(kg,unit), step=stepFor(unit);
-  if(dir>0) return fromUnit(Math.round((cur+step)*100)/100,unit);
-  const dec=Math.max(step,Math.round(cur*0.1/step)*step);
-  return fromUnit(Math.max(0,Math.round((cur-dec)*100)/100),unit);
+/* ---- Salto de peso de cada ejercicio ----
+   Cada máquina, polea o juego de mancuernas sube distinto. Orden: 1) el que pongas en el ejercicio (ex.stepKg);
+   2) el más habitual en tu historial (al menos dos veces); 3) por material: mancuernas +4 kg en total (2 por mancuerna),
+   el resto el de Ajustes. Al subir se prefiere el siguiente peso que ya has usado: así existe en esa máquina. */
+let wCache={rev:-1,map:new Map()};
+/* Mancuernas a una mano: se anota una sola mancuerna (en las demás, la suma de las dos) */
+const oneHand=ex=>/\b(un|una|1)\s+(brazo|mano)\b|unilateral/.test(norm(ex.name));
+function usedWeights(exId){
+  if(wCache.rev!==dataRev) wCache={rev:dataRev,map:new Map()};
+  const ex=getEx(exId), minGap=ex&&ex.equipment==='mancuernas'&&!oneHand(ex)?1.95:0.5;
+  if(wCache.map.has(exId)) return wCache.map.get(exId);
+  const set=new Set();
+  exHistory(exId).forEach(h=>h.en.sets.forEach(x=>{ if(x.done&&x.kg>0) set.add(Math.round(x.kg*20)/20); }));
+  const ws=[...set].sort((a,b)=>a-b), gaps=new Map();
+  for(let i=1;i<ws.length;i++){
+    const d=ws[i]-ws[i-1], k=(Math.round(d*10)/10).toFixed(1);
+    if(d<minGap||d>Math.max(10,ws[i]*0.25)) continue;
+    const o=gaps.get(k)||{n:0,sum:0}; o.n++; o.sum+=d; gaps.set(k,o);
+  }
+  let learned=null, best=1;
+  gaps.forEach(o=>{ const v=o.sum/o.n; if(o.n>best||(o.n===best&&learned!=null&&v<learned)){ best=o.n; learned=v; } });
+  const r={ws,learned:learned!=null?Math.round(learned*100)/100:null};
+  wCache.map.set(exId,r); return r;
+}
+function stepInfo(ex,unit){
+  unit=unit||(ex&&ex.unit)||'kg';
+  if(ex&&ex.stepKg>0) return {kg:ex.stepKg,src:'own'};
+  const l=ex?usedWeights(ex.id).learned:null;
+  if(l) return {kg:l,src:'hist'};
+  if(ex&&ex.equipment==='mancuernas'){ const one=oneHand(ex); return {kg:unit==='lb'?fromUnit(one?5:10,'lb'):(one?2:4),src:'def'}; }
+  return {kg:fromUnit(stepFor(unit),unit),src:'def'};
+}
+const fmtStep=(kg,unit)=>unit==='lb'?fmtNum(Math.round(kg/LB*2)/2,1)+' lb':fmtNum(Math.round(kg*100)/100,2)+' kg';
+const STEP_SRC={own:'el tuyo',hist:'el habitual en tu historial',def:'por el material'};
+const roundKg=(kg,unit)=>fromUnit(toUnit(kg,unit),unit);
+function shiftKg(kg,ex,unit,dir){
+  const step=stepInfo(ex,unit).kg, ws=ex?usedWeights(ex.id).ws:[], eps=0.05;
+  if(dir>0){
+    const nx=ws.find(w=>w>=kg+Math.max(eps,step*0.4));
+    if(nx!=null&&nx-kg<=step*2+eps) return nx;
+    return roundKg(kg+step,unit);
+  }
+  const dec=Math.max(step,Math.round(kg*0.1/step)*step), t=kg-dec;
+  let best=null;
+  ws.forEach(w=>{ if(w<kg-eps&&Math.abs(w-t)<=step/2+eps&&(best==null||Math.abs(w-t)<Math.abs(best-t))) best=w; });
+  if(best!=null) return best;
+  if(t>0) return roundKg(t,unit);
+  const half=roundKg(kg-step/2,unit); return half>0?half:kg; // no bajar a cero
 }
 function suggestFor(ex,item,last,unit,prev2){
   if(!ex||!last) return null;
@@ -1229,21 +1273,21 @@ function suggestFor(ex,item,last,unit,prev2){
     return {kind:'up-reps',kg:null,reps:reps.map(r=>Math.min(r+add,top)),text:`${add===2?'Dos repeticiones':'Una repetición'} más en cada serie, hasta ${top}`};
   }
   const w=Math.max(...work.map(x=>x.kg??0)), atW=work.filter(x=>Math.abs((x.kg??0)-w)<0.01), W=`${fmtW(w,unit)} ${unit}`;
-  const base={w,lastReps:atW.map(x=>x.reps)};
+  const base={w,lastReps:atW.map(x=>x.reps),ex};
   if(pain){
-    const nk=shiftKg(w,unit,-1), again=!!(prev2&&prev2.en.pain);
+    const nk=shiftKg(w,ex,unit,-1), again=!!(prev2&&prev2.en.pain);
     return {...base,kind:'pain',kg:nk,reps:base.lastReps,text:again?`Segunda molestia seguida (${zone}): ${alt?`cambia a ${alt}`:'cambia de ejercicio o consúltalo'}`:`Molestia (${zone}) la última vez: baja a ${fmtW(nk,unit)} ${unit}${alt?` o usa ${alt}`:''}`};
   }
   if(top==null) return {...base,kind:'same',kg:w,reps:base.lastReps,text:null};
   if(atW.some(x=>x.reps<low)){
     const pw=prev2?prev2.en.sets.filter(x=>x.done&&x.kind!=='warmup'&&x.reps!=null&&Math.abs((x.kg??0)-w)<0.01):[];
-    if(pw.some(x=>x.reps<low)){ const nk=shiftKg(w,unit,-1); return {...base,kind:'down',kg:nk,reps:[low],text:`Baja a ${fmtW(nk,unit)} ${unit}: dos sesiones sin llegar a ${low}`}; }
+    if(pw.some(x=>x.reps<low)){ const nk=shiftKg(w,ex,unit,-1); return {...base,kind:'down',kg:nk,reps:[low],text:`Baja a ${fmtW(nk,unit)} ${unit}: dos sesiones sin llegar a ${low}`}; }
     return {...base,kind:'same',kg:w,reps:[low],text:`Repite ${W}: la última vez no llegaste a ${low}`};
   }
   const allTop=atW.every(x=>x.reps>=top);
   if(allTop&&atW.length<item.sets) return {...base,kind:'same',kg:w,reps:[top],text:`Repite ${W}: completa las ${item.sets} series a ${top}`};
   if(allTop&&feel==='hard') return {...base,kind:'same',kg:w,reps:base.lastReps,text:`Repite ${W} × ${top}: llegaste al tope, pero al límite`};
-  if(allTop){ const nk=shiftKg(w,unit,1); return {...base,kind:'up',kg:nk,reps:[low],text:`Sube a ${fmtW(nk,unit)} ${unit} × ${low}: llegaste a ${top} en todas las series${feel==='easy'?' y fue fácil':''}`}; }
+  if(allTop){ const nk=shiftKg(w,ex,unit,1); return {...base,kind:'up',kg:nk,reps:[low],text:`Sube a ${fmtW(nk,unit)} ${unit} × ${low}: llegaste a ${top} en todas las series${feel==='easy'?' y fue fácil':''}`}; }
   if(feel==='hard') return {...base,kind:'same',kg:w,reps:base.lastReps,text:`Repite ${W} y las mismas repeticiones: fue al límite`};
   const add=feel==='easy'?2:1;
   return {...base,kind:'up-reps',kg:w,reps:base.lastReps.map(r=>Math.min(r+add,top)),text:`${W}: ${add===2?'dos repeticiones':'una repetición'} más en cada serie, hasta ${top}${feel==='easy'?' (fue fácil)':''}`};
@@ -1252,8 +1296,8 @@ function suggestFor(ex,item,last,unit,prev2){
 function applyPlan(sg,plan,item,unit){
   if(!plan||!sg||sg.w==null) return sg;
   const low=item?item.repMin:sg.lastReps[0];
-  if(plan==='up'){ const nk=shiftKg(sg.w,unit,1); return {...sg,kind:'up',kg:nk,reps:[low],text:`Tu decisión: subir a ${fmtW(nk,unit)} ${unit} × ${low}`,mine:true}; }
-  if(plan==='down'){ const nk=shiftKg(sg.w,unit,-1); return {...sg,kind:'down',kg:nk,reps:sg.lastReps,text:`Tu decisión: bajar a ${fmtW(nk,unit)} ${unit}`,mine:true}; }
+  if(plan==='up'){ const nk=shiftKg(sg.w,sg.ex,unit,1); return {...sg,kind:'up',kg:nk,reps:[low],text:`Tu decisión: subir a ${fmtW(nk,unit)} ${unit} × ${low}`,mine:true}; }
+  if(plan==='down'){ const nk=shiftKg(sg.w,sg.ex,unit,-1); return {...sg,kind:'down',kg:nk,reps:sg.lastReps,text:`Tu decisión: bajar a ${fmtW(nk,unit)} ${unit}`,mine:true}; }
   return {...sg,kind:'same',kg:sg.w,reps:sg.lastReps,text:`Tu decisión: repetir ${fmtW(sg.w,unit)} ${unit}`,mine:true};
 }
 /* Valores de referencia de cada serie: la última vez y la propuesta */
@@ -1791,6 +1835,7 @@ function entryMenu(s,en,idx){
   c.append(sheetItem('pin','Nota del ejercicio',()=>{ closeSheet(); fixedNoteSheet(ex); },{small:'en todas las rutinas'}));
   if(it) c.append(sheetItem('list','Nota en esta rutina',()=>{ closeSheet(); itemNoteSheet(rt,it); },{small:'solo en '+rt.name}));
   c.append(sheetItem('timer','Descanso',()=>{ closeSheet(); restSheet(ex); },{small:fmtSecs(ex.restSec)}));
+  if(ex.type==='peso_reps') c.append(stepItem(ex));
   c.append(sheetItem('chev-right','Ver historial del ejercicio',()=>{ closeSheet(); flushSave(); nav('exercise',{exId:ex.id}); }));
   if(idx>0) c.append(sheetItem('arrow-up','Subir',()=>{ closeSheet(); commit(null,()=>{ s.entries.splice(idx,1); s.entries.splice(idx-1,0,en); }); }));
   if(idx<s.entries.length-1) c.append(sheetItem('arrow-down','Bajar',()=>{ closeSheet(); commit(null,()=>{ s.entries.splice(idx,1); s.entries.splice(idx+1,0,en); }); }));
@@ -1830,6 +1875,21 @@ function itemNoteSheet(rt,it){
   noteSheet('Nota en la rutina',`Solo aparece con «${ex?ex.name:'este ejercicio'}» dentro de «${rt.name}».`,it.note,'Por ejemplo: RIR 1 · calentamiento obligatorio',
     v=>commit(v?'📝 Nota de la rutina guardada':'📝 Nota de la rutina borrada',()=>{ it.note=v; }));
 }
+function stepSheet(ex){
+  const unit=ex.unit, c=el('div'), auto={...stepInfo(Object.assign({},ex,{stepKg:null}),unit)};
+  const pick=(kg,msg)=>{ closeSheet(); commit(msg,()=>{ if((ex.stepKg||null)===kg) return false; ex.stepKg=kg; }); };
+  c.append(sheetItem('zap','Automático · '+fmtStep(auto.kg,unit),()=>pick(null,`⚖️ Salto automático para ${ex.name}`),{small:STEP_SRC[auto.src],tick:!ex.stepKg}));
+  const opts=unit==='lb'?[2.5,5,10,15,20]:[1,1.25,2,2.5,4,5,10];
+  opts.forEach(v=>{ const kg=fromUnit(v,unit); c.append(sheetItem('trend',fmtStep(kg,unit),()=>pick(kg,`⚖️ Salto de ${fmtStep(kg,unit)} para ${ex.name}`),{tick:!!ex.stepKg&&Math.abs(ex.stepKg-kg)<0.01})); });
+  c.append(sheetItem('pencil','Otro…',()=>{ closeSheet();
+    noteSheet('Salto de peso',`Lo que sube «${ex.name}» de un peso al siguiente, en ${unit}. Con mancuernas, la suma de las dos.`,ex.stepKg?String(toUnit(ex.stepKg,unit)).replace('.',','):'','Por ejemplo: 2,3',v=>{
+      const n=parseNum(v); if(n==null||!(n>0)){ if(v==='') pick(null,`⚖️ Salto automático para ${ex.name}`); return; }
+      const kg=fromUnit(n,unit); commit(`⚖️ Salto de ${fmtStep(kg,unit)} para ${ex.name}`,()=>{ ex.stepKg=kg; });
+    });
+  }));
+  openSheet('Salto de peso · '+ex.name,c);
+}
+function stepItem(ex){ const si=stepInfo(ex); return sheetItem('trend','Salto de peso',()=>{ closeSheet(); stepSheet(ex); },{small:fmtStep(si.kg,ex.unit)+(si.src==='own'?'':' · automático')}); }
 function restSheet(ex){
   const c=el('div'); const opts=[30,45,60,75,90,120,150,180,240];
   opts.forEach(v=>c.append(sheetItem('timer',fmtSecs(v),()=>{ closeSheet(); commit(`⏱️ Descanso de ${fmtSecs(v)} para ${ex.name}`,()=>{ if(ex.restSec===v) return false; ex.restSec=v; }); },{tick:ex.restSec===v})));
@@ -2245,6 +2305,7 @@ function renderExercise(main){
 function exerciseMenu(e){
   const c=el('div'), h=exHistory(e.id).length;
   c.append(sheetItem('pin','Nota del ejercicio',()=>{ closeSheet(); fixedNoteSheet(e); },{small:'en todas las rutinas'}));
+  if(e.type==='peso_reps') c.append(stepItem(e));
   c.append(sheetItem('swap','Unir con otro ejercicio…',()=>{ closeSheet(); mergeSheet(e); },{small:'si es el mismo con otro nombre'}));
   c.append(sheetItem('archive',e.archived?'Recuperar del archivo':'Archivar',()=>{ closeSheet(); commit(e.archived?'📦 Ejercicio recuperado':'📦 Ejercicio archivado',()=>{ e.archived=!e.archived; }); }));
   c.append(sheetItem('trash','Borrar',()=>{ closeSheet();
@@ -2854,7 +2915,7 @@ function renderSettings(main){
   }
 
   const pr=sec('trend','Progresión');
-  line(pr,'Subida de peso en kg',numIn(fmtNum(st.kgStep,2),v=>setSetting('kgStep',parseNum(v)??2.5),'decimal'),'Cuando llegas al tope del rango en todas las series');
+  line(pr,'Subida de peso en kg',numIn(fmtNum(st.kgStep,2),v=>setSetting('kgStep',parseNum(v)??2.5),'decimal'),'Si el ejercicio no tiene historial ni salto propio');
   line(pr,'Subida de peso en lb',numIn(fmtNum(st.lbStep,2),v=>setSetting('lbStep',parseNum(v)??5),'decimal'));
 
   const d=sec('save','Datos y copias');
@@ -2891,6 +2952,7 @@ function renderHelp(main){
   L([['Empezar:','en «Entrenar», pulsa «Empezar» en la rutina y elige «Completa», «45 min» o «30 min» (solo los ejercicios esenciales, o esenciales e importantes).'],
      ['Anotar una serie:','escribe el peso y las repeticiones y pulsa ✓. Si dejas un campo vacío, se usa el valor en gris (la sugerencia o lo de la última vez).'],
      ['kg o lb:','pulsa la unidad que hay encima de la columna del peso. El ejercicio recuerda la unidad para la próxima vez; todo se guarda en kg y se convierte al mostrarlo.'],
+     ['Salto de peso:','cada ejercicio sube según su máquina, polea o mancuernas. Al subir peso, la sugerencia propone el siguiente peso que ya has usado en ese ejercicio; si nunca has pasado de ahí, suma el salto más habitual de tu historial. Sin historial: +4 kg en mancuernas (2 por cada una; el peso de las mancuernas se anota como la suma de las dos) y +2 kg en las de una mano («a un brazo») y el de Ajustes → Progresión en lo demás. Para fijarlo tú: ⋯ del ejercicio → «Salto de peso».'],
      ['Sugerencia (en verde):','si la última vez llegaste al tope del rango en todas las series, propone subir peso; si no, una repetición más. Si escribes otros valores, mandan los tuyos.'],
      ['Serie de calentamiento, drop set o al fallo:','pulsa el número de la serie.'],
      ['Máquina ocupada:','botón ⇄ del ejercicio: alternativas de la rutina o cualquier otro ejercicio. La próxima vez que hagas esa rutina se repite el cambio.'],
