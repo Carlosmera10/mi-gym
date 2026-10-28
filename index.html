@@ -782,7 +782,7 @@ function normalizeSession(s){
 }
 function normalizeSettings(s){
   s=s&&typeof s==='object'?s:{};
-  return {restDefault:intOr(s.restDefault,90,0,900),autoRest:s.autoRest!==false,sound:s.sound!==false,vibrate:s.vibrate!==false,
+  return {restDefault:intOr(s.restDefault,90,0,900),autoRest:s.autoRest!==false,sound:s.sound!==false,bgRest:s.bgRest!==false,vibrate:s.vibrate!==false,
     kgStep:clamp(parseNum(s.kgStep)??2.5,0.25,20),lbStep:clamp(parseNum(s.lbStep)??5,0.5,40),
     lastBackup:validIso(s.lastBackup)?s.lastBackup:'',backupSnooze:validIso(s.backupSnooze)?s.backupSnooze:''};
 }
@@ -1927,9 +1927,61 @@ function beep(){
   if(!audioCtx) return;
   try{ const t0=audioCtx.currentTime; [0,.25,.5].forEach((d,i)=>{ const o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.frequency.value=i===2?1175:880; o.type='sine'; g.gain.setValueAtTime(.0001,t0+d); g.gain.exponentialRampToValueAtTime(.35,t0+d+.02); g.gain.exponentialRampToValueAtTime(.0001,t0+d+.18); o.connect(g); g.connect(audioCtx.destination); o.start(t0+d); o.stop(t0+d+.2); }); }catch(e){}
 }
-function startRest(secs,label){ unlockAudio(); ui.rest={end:Date.now()+secs*1000,total:secs,label,fired:false}; saveUI(); renderRestBar(); }
-function stopRest(){ ui.rest=null; saveUI(); renderRestBar(); }
-function adjustRest(d){ if(!ui.rest) return; ui.rest.end+=d*1000; ui.rest.total=Math.max(1,ui.rest.total+d); if(ui.rest.end<=Date.now()) { stopRest(); return; } ui.rest.fired=false; saveUI(); tick(); }
+function startRest(secs,label){ unlockAudio(); ui.rest={end:Date.now()+secs*1000,total:secs,label,fired:false}; saveUI(); renderRestBar(); playRestAudio(); }
+function stopRest(){ ui.rest=null; saveUI(); renderRestBar(); stopRestAudio(); }
+function adjustRest(d){ if(!ui.rest) return; ui.rest.end+=d*1000; ui.rest.total=Math.max(1,ui.rest.total+d); if(ui.rest.end<=Date.now()) { stopRest(); return; } ui.rest.fired=false; saveUI(); tick(); playRestAudio(); }
+
+/* ---- Audio del descanso ----
+   Android congela Chrome a los pocos segundos de salir de la app, salvo si está reproduciendo sonido
+   (como un reproductor de música). Por eso, durante el descanso se reproduce un audio que dura lo mismo
+   que el descanso y acaba en pitidos: suena a su hora aunque la app esté en segundo plano, y mientras
+   suena la app sigue viva (aviso con vibración incluido). Se ve en la notificación de reproducción. */
+let restAudio=null, restAudioUrl='';
+function restWav(secs,withBeeps){
+  const SR=8000, n=Math.max(1,Math.round(secs*SR)), N=n+Math.round(2.3*SR);
+  const buf=new ArrayBuffer(44+N), v=new DataView(buf), b=new Uint8Array(buf);
+  const str=(o,s)=>{ for(let i=0;i<s.length;i++) b[o+i]=s.charCodeAt(i); };
+  str(0,'RIFF'); v.setUint32(4,36+N,true); str(8,'WAVE'); str(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,SR,true); v.setUint32(28,SR,true); v.setUint16(32,1,true); v.setUint16(34,8,true); str(36,'data'); v.setUint32(40,N,true);
+  b.fill(128,44); for(let i=0;i<N;i+=SR/2) b[44+i]=129; // silencio con un impulso mínimo (inaudible) para que no cuente como audio vacío
+  if(withBeeps){
+    const tone=(t0,dur,f,amp)=>{ const a=Math.round(t0*SR), z=Math.round(dur*SR); for(let i=0;i<z;i++){ const k=a+i; if(k<0||k>=N) continue; const env=Math.min(1,i/80,(z-i)/80); b[44+k]=128+Math.round(amp*env*Math.sin(2*Math.PI*f*i/SR)); } };
+    const end=n/SR;
+    [3,2,1].forEach(s=>{ if(end-s>0.3) tone(end-s,.1,880,45); });            // cuenta atrás suave
+    [0,.3,.6,1.3,1.6,1.9].forEach((d,i)=>tone(end+d,.2,i%3===2?1175:988,110)); // fin del descanso, dos veces
+  }
+  return URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+}
+const restAudioActive=()=>!!(restAudio&&restAudioUrl&&!restAudio.paused&&!restAudio.ended);
+function playRestAudio(){
+  clearRestAudio();
+  const r=ui.rest, st=appState&&appState.settings; if(!r||!st||!st.bgRest) return;
+  const left=(r.end-Date.now())/1000; if(left<=0.3) return;
+  if(!restAudio){
+    restAudio=new Audio(); restAudio.preload='auto';
+    restAudio.addEventListener('ended',()=>{ clearRestAudio(); });
+  }
+  restAudioUrl=restWav(left,st.sound); restAudio.src=restAudioUrl;
+  const p=restAudio.play(); if(p&&p.then) p.then(setRestMedia).catch(()=>{});
+}
+function setRestMedia(){
+  const ms=navigator.mediaSession, r=ui.rest; if(!ms||!r) return;
+  try{
+    if(window.MediaMetadata) ms.metadata=new MediaMetadata({title:'Descanso de '+fmtClock(r.total),artist:r.label||'Mi Gym',album:'Mi Gym',
+      artwork:[{src:'icon-192.png',sizes:'192x192',type:'image/png'},{src:'icon-512.png',sizes:'512x512',type:'image/png'}]});
+    ms.playbackState='playing';
+  }catch(e){}
+  const h=(k,f)=>{ try{ ms.setActionHandler(k,f); }catch(e){} };
+  h('pause',stopRest); h('stop',stopRest);
+  h('seekbackward',()=>adjustRest(-15)); h('seekforward',()=>adjustRest(15));
+}
+function clearRestAudio(){
+  if(restAudio){ try{ restAudio.pause(); restAudio.removeAttribute('src'); restAudio.load(); }catch(e){} }
+  if(restAudioUrl){ URL.revokeObjectURL(restAudioUrl); restAudioUrl=''; }
+  const ms=navigator.mediaSession;
+  if(ms){ try{ ms.metadata=null; ms.playbackState='none'; ['pause','stop','seekbackward','seekforward'].forEach(k=>{ try{ ms.setActionHandler(k,null); }catch(e){} }); }catch(e){} }
+}
+const stopRestAudio=clearRestAudio;
 function renderRestBar(){
   const bar=$('restBar'), r=ui.rest;
   const on=!!(r&&Date.now()<r.end+5000);
@@ -1944,7 +1996,7 @@ function restFired(){
   const r=ui.rest; if(!r||r.fired) return; r.fired=true; saveUI();
   const st=appState.settings;
   if(st.vibrate&&navigator.vibrate) try{ navigator.vibrate([250,120,250,120,400]); }catch(e){}
-  if(st.sound) beep();
+  if(st.sound&&!restAudioActive()) beep(); // si suena el audio del descanso, los pitidos ya van en él
   if(document.hidden&&'Notification' in window&&Notification.permission==='granted'){
     const opts={body:r.label||'',tag:'migym-rest',renotify:true,vibrate:[250,120,250,120,400],icon:'icon-192.png'};
     const show=reg=>reg&&reg.showNotification('Descanso terminado',opts);
@@ -2793,11 +2845,12 @@ function renderSettings(main){
   line(r,'Descanso por defecto (segundos)',numIn(st.restDefault,v=>{ setSetting('restDefault',parseInt(v,10)||0); }),'Se usa si el ejercicio no tiene uno propio');
   line(r,'Empezar el descanso al marcar una serie',sw(st.autoRest,v=>setSetting('autoRest',v),'Descanso automático'));
   line(r,'Sonido al terminar',sw(st.sound,v=>{ setSetting('sound',v); if(v){ unlockAudio(); beep(); } },'Sonido'));
+  line(r,'Seguir contando con la app minimizada',sw(st.bgRest,v=>{ setSetting('bgRest',v); if(v) playRestAudio(); else stopRestAudio(); },'Descanso en segundo plano'),'Por el volumen multimedia del móvil');
   line(r,'Vibración al terminar',sw(st.vibrate,v=>{ setSetting('vibrate',v); if(v&&navigator.vibrate) try{ navigator.vibrate(200); }catch(e){} },'Vibración'));
   if('Notification' in window){
     const p=Notification.permission;
     const b=p==='granted'?el('span','chip accent','Activado'):p==='denied'?el('span','chip','Bloqueado en Chrome'):btn('Permitir','secondary small',null,async()=>{ try{ await Notification.requestPermission(); }catch(e){} renderApp(); },'bell');
-    line(r,'Aviso con la app minimizada',b,p==='denied'?'Para desbloquearlo: icono a la izquierda de la dirección web → Permisos → Notificaciones → Permitir':'Solo si la minimizas durante el descanso');
+    line(r,'Aviso con la app minimizada',b,p==='denied'?'Para desbloquearlo: icono a la izquierda de la dirección web → Permisos → Notificaciones → Permitir':'Para que también vibre con la app minimizada');
   }
 
   const pr=sec('trend','Progresión');
@@ -2843,6 +2896,7 @@ function renderHelp(main){
      ['Máquina ocupada:','botón ⇄ del ejercicio: alternativas de la rutina o cualquier otro ejercicio. La próxima vez que hagas esa rutina se repite el cambio.'],
      ['Técnica:','pulsa el nombre del ejercicio o el icono del libro.'],
      ['Descanso:','empieza solo al marcar una serie; abajo puedes restar o sumar 15 s o saltarlo. Al acabar vibra y suena. La pantalla no se apaga mientras estás en la sesión.'],
+     ['Descanso con la app minimizada:','Android congela las apps que no están delante, salvo las que reproducen sonido. Por eso el descanso se reproduce como un audio (lo verás en la notificación de reproducción, con su barra de progreso): pita en los 3 últimos segundos y al terminar, aunque la app esté minimizada o la pantalla apagada. Suena con el volumen multimedia: súbelo antes de empezar. En esa notificación, pausa = saltar el descanso. Para que además vibre, permite los avisos en Ajustes → Descanso. Se puede desactivar en Ajustes → Descanso → «Seguir contando con la app minimizada».'],
      ['Terminar:','las series sin marcar se descartan. Si cierras la app a mitad, la sesión sigue guardada y aparece al volver.']]);
   H('Cómo ha ido cada ejercicio');
   L([['Al marcar la primera serie','aparece «¿Cómo ha ido?» con cuatro botones: Fácil, Bien, Al límite y Molestia. Cuando terminas todas las series se resalta para que no se te olvide.'],
