@@ -3,7 +3,7 @@
 //   solo si no hay conexión usa la copia guardada.
 // - Guarda también la tipografía para que se vea igual sin conexión.
 // - Solo borra sus propias cachés (el dominio lo comparten otras apps).
-const CACHE = "migym-v3";
+const CACHE = "migym-v4";
 const FONT_CACHE = "migym-fonts-1";
 const FILES = ["./", "index.html", "app.webmanifest", "icon-192.png", "icon-512.png"];
 const FONT_HOSTS = ["fonts.googleapis.com", "fonts.gstatic.com"];

@@ -160,6 +160,7 @@ main{padding:0 32px 120px;max-width:920px;width:100%;margin:0 auto}
 .set-lbl.fallo{color:var(--danger)}
 .prev{font-size:.84rem;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
 .sets input{text-align:center;padding:8px 4px;min-height:40px;font-weight:600}
+.sets input::placeholder{color:var(--muted);opacity:.85}
 .chk{width:46px;height:40px;padding:0;background:var(--sunken);color:var(--faint);min-height:40px;border-radius:8px}
 .chk:hover{background:var(--track);color:var(--ink)}
 .chk.on{background:var(--done);color:#fff}
@@ -1290,6 +1291,10 @@ function renderTrain(main){
     c.append(ic('timer','lg'),t,btn(desk?'Abrir':'Continuar',desk?'secondary':'',null,()=>nav('session',{sessionId:live.id}),desk?'chev-right':'play'));
     main.append(c);
   }
+  const dup=importReview();
+  if(dup.length){ const n=el('div','desk-note'); n.style.background='var(--warn-bg)'; n.style.color='var(--warn-ink)'; n.style.borderColor='var(--warn-line)'; n.style.margin='0 0 12px'; n.style.alignItems='center';
+    const t=el('span','',`${pl(dup.length,'ejercicio importado de Hevy parece duplicado','ejercicios importados de Hevy parecen duplicados')} de los tuyos (p. ej. «${dup[0].e.name}» ≈ «${dup[0].sug.ex.name}»). Únelos para ver su historial, «la última vez» y las propuestas.`); t.style.flex='1';
+    n.append(ic('alert'),t,btn('Revisar','small',null,reviewImported)); main.append(n); }
   if(!desk){
     /* Semana actual (lunes a domingo) */
     const ws=weekStart(new Date()), days=new Set(finished().map(s=>s.date));
@@ -2188,6 +2193,7 @@ function renderExercise(main){
 function exerciseMenu(e){
   const c=el('div'), h=exHistory(e.id).length;
   c.append(sheetItem('pin','Nota del ejercicio',()=>{ closeSheet(); fixedNoteSheet(e); },{small:'en todas las rutinas'}));
+  c.append(sheetItem('swap','Unir con otro ejercicio…',()=>{ closeSheet(); mergeSheet(e); },{small:'si es el mismo con otro nombre'}));
   c.append(sheetItem('archive',e.archived?'Recuperar del archivo':'Archivar',()=>{ closeSheet(); commit(e.archived?'📦 Ejercicio recuperado':'📦 Ejercicio archivado',()=>{ e.archived=!e.archived; }); }));
   c.append(sheetItem('trash','Borrar',()=>{ closeSheet();
     if(h||appState.sessions.some(s=>s.entries.some(en=>en.exerciseId===e.id))){ confirmSheet('No se puede borrar',`Aparece en ${pl(h,'sesión','sesiones')} del historial. Puedes archivarlo para que no salga en las listas.`,'Archivar',()=>commit('📦 Ejercicio archivado',()=>{ e.archived=true; })); return; }
@@ -2801,6 +2807,8 @@ function renderSettings(main){
   const d=sec('save','Datos y copias');
   const nS=finished().length;
   line(d,'Importar historial de Hevy',btn('Elegir CSV','secondary',null,pickHevyFile,'download'),'En Hevy: Perfil → Settings → Export & Import Data → Export Data → Export Workouts');
+  const nImp=importedExs().length;
+  line(d,'Revisar ejercicios importados',btn('Revisar','secondary',null,reviewImported,'swap'),nImp?`${pl(nImp,'ejercicio creado','ejercicios creados')} al importar; une los que estén duplicados`:'Unir duplicados creados al importar de Hevy');
   line(d,'Exportar copia de seguridad',btn('Exportar','secondary',null,exportData,'upload'),st.lastBackup?`Última: ${fmtDate(ymd(new Date(st.lastBackup)),{year:true})}`:`Nunca · ${pl(nS,'sesión','sesiones')} guardadas`);
   line(d,'Importar copia de seguridad',btn('Importar','secondary',null,pickBackupFile,'download'));
   line(d,'Enviar al otro dispositivo',btn('Enviar','secondary',null,shareData,'share'),'Por ejemplo, por Drive o Quick Share; en el otro, «Importar copia»');
@@ -2877,6 +2885,8 @@ function renderHelp(main){
   H('Importar de Hevy');
   L([['En Hevy (móvil):','pestaña Profile → Settings (rueda, arriba a la derecha) → Export & Import Data → Export Data → Export Workouts. Guarda el archivo CSV.'],
      ['En Mi Gym:','Ajustes → «Importar historial de Hevy» → «Elegir CSV». Antes de importar verás un resumen.'],
+     ['Nombres:','los ejercicios se reconocen en inglés o en español. Los que no reconoce aparecen en una lista para que elijas a cuál de los tuyos corresponden (con «≈» va la propuesta) o crear uno nuevo; la elección se recuerda.'],
+     ['Duplicados:','si ya importaste y un ejercicio quedó repetido, Ajustes → «Revisar ejercicios importados», o en el ejercicio, ⋯ → «Unir con otro ejercicio…».'],
      ['Repetir la importación','no duplica nada: las sesiones que ya estaban se saltan.']],true);
   H('Copias de seguridad');
   L(['Ajustes → «Exportar copia de seguridad» descarga un archivo con todos tus datos.',
@@ -2912,7 +2922,7 @@ function parseCSV(text){
 }
 const MONTHS={ene:0,jan:0,feb:1,mar:2,abr:3,apr:3,may:4,jun:5,jul:6,ago:7,aug:7,sep:8,sept:8,set:8,oct:9,nov:10,dic:11,dec:11};
 function parseHevyDate(s){
-  s=String(s||'').trim(); if(!s) return null;
+  s=String(s||'').trim().replace(/\s+de\s+/gi,' ').replace(/(\p{L})\./gu,'$1').replace(/\s+/g,' '); if(!s) return null;
   let m=s.match(/^(\d{1,2})\s+([a-záéíóú]+)\.?\s+(\d{4}),?\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]\.?\s?m\.?)?$/i);
   if(m){ const mo=MONTHS[norm(m[2]).slice(0,4)]??MONTHS[norm(m[2]).slice(0,3)]; if(mo==null) return null; let h=+m[4]; const ap=m[6]&&m[6].toLowerCase()[0]; if(ap==='p'&&h<12) h+=12; if(ap==='a'&&h===12) h=0; return new Date(+m[3],mo,+m[1],h,+m[5]); }
   m=s.match(/^([a-z]+)\.?\s+(\d{1,2}),?\s+(\d{4}),?\s+(\d{1,2}):(\d{2})\s*([ap]m)?$/i);
@@ -2921,20 +2931,154 @@ function parseHevyDate(s){
   if(m) return new Date(+m[1],+m[2]-1,+m[3],+m[4],+m[5]);
   return null;
 }
-const KIND_HEVY={warmup:'warmup',normal:'normal',dropset:'drop',failure:'fallo'};
+const KIND_HEVY={warmup:'warmup',normal:'normal',dropset:'drop',failure:'fallo',calentamiento:'warmup',drop:'drop','drop set':'drop',fallo:'fallo',serie:'normal'};
 /* Prepara la importación sin tocar los datos: devuelve las sesiones nuevas y los ejercicios que hay que crear */
+/* ---- Reconocer los ejercicios de Hevy en inglés o en español ----
+   1) nombre exacto (inglés guardado en el ejercicio, español de HEVY_ES o el nombre propio);
+   2) si no, parecido por palabras traducidas al inglés (ES_EN); la propuesta se confirma antes de importar. */
+const HEVY_ES={
+ 'ex:curl-femoral':['Curl de Pierna Sentado','Curl de Pierna Sentado (Máquina)','Curl Femoral Sentado (Máquina)'],
+ 'ex:prensa':['Press de Piernas Sentado','Press de Piernas Horizontal (Máquina)','Prensa de Piernas Horizontal (Máquina)'],
+ 'ex:hip-thrust':['Empuje de Cadera (Máquina)','Hip Thrust (Máquina)'],
+ 'ex:pm-rumano-mancuernas':['Peso Muerto Rumano (Mancuerna)'],
+ 'ex:pm-rumano-barra':['Peso Muerto Rumano (Barra)'],
+ 'ex:ext-cuad':['Extensión de Pierna (Máquina)','Extensión de Piernas (Máquina)','Extensión de Cuádriceps (Máquina)'],
+ 'ex:abduccion':['Abducción de Cadera (Máquina)'],
+ 'ex:aduccion':['Aducción de Cadera (Máquina)'],
+ 'ex:sentadilla-smith':['Sentadilla (Máquina Smith)'],
+ 'ex:sentadilla-goblet':['Sentadilla Goblet','Sentadilla Goblet (Pesa Rusa)','Sentadilla Goblet (Kettlebell)'],
+ 'ex:split-squat':['Sentadilla Dividida (Mancuerna)','Sentadilla Búlgara (Mancuerna)'],
+ 'ex:puente-gluteo':['Puente de Glúteos','Puente de Glúteo'],
+ 'ex:puente-gluteo-1':['Puente de Glúteos a una Pierna','Puente de Glúteo a una Pierna'],
+ 'ex:hip-thrust-1':['Empuje de Cadera a una Pierna'],
+ 'ex:frog-pumps':['Frog Pumps (Mancuerna)'],
+ 'ex:patada-gluteo':['Patada Trasera (Máquina)','Patada de Glúteo (Máquina)'],
+ 'ex:gemelos':['Elevación de Gemelos de Pie (Máquina)','Elevación de Talones de Pie (Máquina)'],
+ 'ex:ext-lumbar':['Extensión de Espalda (Máquina)'],
+ 'ex:hiperextensiones':['Extensión de Espalda (Hiperextensión)','Hiperextensión'],
+ 'ex:press-inclinado-mancuernas':['Press de Banca Inclinado (Mancuerna)'],
+ 'ex:press-banca-smith':['Press de Banca (Máquina Smith)'],
+ 'ex:press-inclinado-maquina':['Press de Pecho Inclinado (Máquina)'],
+ 'ex:press-pecho-maquina':['Press de Pecho (Máquina)'],
+ 'ex:press-suelo':['Press de Suelo (Barra)','Press en el Suelo (Barra)'],
+ 'ex:pec-deck':['Aperturas (Máquina)','Apertura de Pecho (Máquina)','Pec Deck (Máquina)'],
+ 'ex:fondos-maquina':['Fondos Sentado (Máquina)','Máquina de Fondos Sentado'],
+ 'ex:flexiones-cerradas':['Flexiones con Agarre Cerrado','Flexión - Agarre Cerrado'],
+ 'ex:flexiones-serrato':['Flexiones de Serrato'],
+ 'ex:jalon':['Jalón al Pecho (Cable)','Jalón al Pecho (Polea)'],
+ 'ex:jalon-cerrado':['Jalón al Pecho - Agarre Cerrado (Cable)','Jalón al Pecho con Agarre Cerrado (Cable)'],
+ 'ex:remo-maquina':['Remo Sentado (Máquina)'],
+ 'ex:remo-mancuerna':['Remo con Mancuerna','Remo (Mancuerna)'],
+ 'ex:remo-polea-barra':['Remo Sentado en Polea - Agarre de Barra'],
+ 'ex:press-hombro':['Press de Hombros Sentado (Máquina)'],
+ 'ex:laterales-mancuernas':['Elevación Lateral (Mancuerna)'],
+ 'ex:laterales-polea':['Elevación Lateral a un Brazo (Cable)'],
+ 'ex:laterales-banda':['Elevación Lateral (Banda)'],
+ 'ex:y-raise':['Elevación en Y con Soporte en el Pecho (Mancuerna)'],
+ 'ex:face-pull':['Tirón a la Cara'],
+ 'ex:pajaros-maquina':['Vuelo Inverso Deltoides Posterior (Máquina)','Aperturas Inversas (Máquina)'],
+ 'ex:separacion-banda':['Separación de Banda'],
+ 'ex:curl-inclinado':['Curl Inclinado Sentado (Mancuerna)','Curl Inclinado (Mancuerna)'],
+ 'ex:curl-polea-detras':['Curl por detrás de la espalda (Polea)'],
+ 'ex:martillo':['Curl Martillo (Mancuerna)'],
+ 'ex:martillo-banda':['Curl Martillo (Banda)'],
+ 'ex:curl-z':['Curl de Bíceps con Barra Z','Curl con Barra EZ'],
+ 'ex:curl-maquina':['Curl de Bíceps (Máquina)'],
+ 'ex:triceps':['Jalón de Tríceps en Polea','Extensión de Tríceps en Polea'],
+ 'ex:triceps-cabeza':['Extensión de Tríceps por Encima de la Cabeza (Cable)','Extensión de Tríceps sobre la Cabeza (Polea)'],
+ 'ex:triceps-maquina':['Extensión de Tríceps (Máquina)'],
+ 'ex:dead-bug':['Bicho Muerto'],
+ 'ex:bird-dog':['Perro de Caza'],
+ 'ex:plancha-frontal':['Plancha'],
+ 'ex:plancha-lateral':['Plancha Lateral'],
+ 'ex:crunch-maquina':['Abdominales (Máquina)','Crunch (Máquina)'],
+ 'ex:rueda':['Rueda Abdominal'],
+ 'ex:gato-camello':['Gato-Camello'],
+ 'ex:comba':['Saltar la Cuerda','Saltar a la Comba','Comba'],
+ 'ex:caminar':['Caminar','Caminata'],
+ 'ex:escaladora':['Máquina de Escaleras (Pisos)','Escaladora (Pisos)'],
+ 'ex:natacion':['Natación']
+};
+const ES_EN={pecho:'chest',banca:'bench',inclinado:'incline',inclinada:'incline',inclinadas:'incline',inclinados:'incline',declinado:'decline',
+ mancuerna:'dumbbell',mancuernas:'dumbbell',maquina:'machine',polea:'cable',hombro:'shoulder',hombros:'shoulder',sentado:'seated',sentada:'seated',pie:'standing',
+ remo:'row',jalon:'pulldown',pierna:'leg',piernas:'leg',empuje:'thrust',cadera:'hip',caderas:'hip',apertura:'fly',aperturas:'fly',vuelo:'fly',
+ elevacion:'raise',elevaciones:'raise',laterales:'lateral',soporte:'supported',tiron:'pull',cara:'face',extension:'extension',extensiones:'extension',
+ abduccion:'abduction',aduccion:'adduction',gemelo:'calf',gemelos:'calf',talon:'calf',talones:'calf',pantorrilla:'calf',sentadilla:'squat',peso:'',muerto:'deadlift',
+ rumano:'romanian',bulgara:'split',dividida:'split',martillo:'hammer',plancha:'plank',cuerda:'rope',saltar:'jump',comba:'jump rope',abdominal:'crunch',abdominales:'crunch',
+ rueda:'wheel',fondo:'dip',fondos:'dip',flexion:'push',flexiones:'push',barra:'barbell',banda:'band',pesa:'kettlebell',rusa:'',caminar:'walking',caminata:'walking',
+ natacion:'swimming',escaleras:'stair',escaladora:'stair',hiperextension:'hyperextension',espalda:'back',brazo:'arm',mano:'arm',un:'single',una:'single',unilateral:'single arm',
+ cerrado:'close',cerrada:'close',agarre:'grip',posterior:'rear',inverso:'reverse',inversa:'reverse',inversas:'reverse',deltoides:'delt',cabeza:'overhead',encima:'overhead',
+ detras:'behind',gluteo:'glute',gluteos:'glute',puente:'bridge',patada:'kick',trasera:'rear',suelo:'floor',dorsal:'lat',dorsales:'lat',cuadriceps:'leg',
+ femoral:'leg curl',bicho:'dead bug',perro:'bird dog',caza:'',prensa:'press',pecdeck:'fly',deck:'fly',pec:'',ez:'ez',z:'ez',cable:'cable'};
+const NAME_STOP=new Set(['de','del','la','el','a','al','en','con','por','sobre','para','los','las','y','the','with','on','of','to','in']);
+const EQUIP_TOK=new Set(['dumbbell','machine','cable','barbell','smith','band','kettlebell']);
+const tokCache=new Map();
+function nameTokens(name){
+  const key=norm(name); if(tokCache.has(key)) return tokCache.get(key);
+  const out=new Set();
+  key.replace(/[^a-z0-9]+/g,' ').split(' ').filter(Boolean).forEach(w=>{
+    if(NAME_STOP.has(w)) return;
+    const x=Object.prototype.hasOwnProperty.call(ES_EN,w)?ES_EN[w]:w;
+    x.split(' ').filter(Boolean).forEach(y=>{ if(y.length>3&&y.endsWith('s')&&!y.endsWith('ss')) y=y.slice(0,-1); out.add(y); });
+  });
+  tokCache.set(key,out); return out;
+}
+function nameScore(a,b){
+  let inter=0; a.forEach(x=>{ if(b.has(x)) inter++; });
+  const uni=a.size+b.size-inter; let sc=uni?inter/uni:0;
+  const ea=[...a].filter(x=>EQUIP_TOK.has(x)), eb=[...b].filter(x=>EQUIP_TOK.has(x));
+  if(ea.length&&eb.length&&!ea.some(x=>eb.includes(x))) sc-=0.3;
+  return sc;
+}
+const exAliases=e=>[e.name,...e.hevy,...(HEVY_ES[e.id]||[])];
+/* Mejor ejercicio parecido (excluye los indicados); null si ninguno se parece lo suficiente */
+function bestMatch(title,exclude=()=>false){
+  const t=nameTokens(title); let best=null,bs=0;
+  appState.exercises.forEach(e=>{ if(exclude(e)) return; exAliases(e).forEach(n=>{ const sc=nameScore(t,nameTokens(n)); if(sc>bs+1e-9||(Math.abs(sc-bs)<1e-9&&best&&e.id.startsWith('ex:')&&!best.id.startsWith('ex:'))){ bs=sc; best=e; } }); });
+  return best&&bs>=0.45?{ex:best,score:bs}:null;
+}
+function guessMuscle(title){
+  const t=nameTokens(title), h=x=>t.has(x);
+  if(h('leg')&&h('curl')||h('deadlift')||h('romanian')) return 'isquios';
+  if(h('hip')&&h('thrust')||h('glute')||h('bridge')||h('kick')||h('abduction')) return 'gluteos';
+  if(h('adduction')) return 'aductores';
+  if(h('calf')) return 'gemelos';
+  if(h('squat')||h('leg')||h('lunge')) return 'cuadriceps';
+  if(h('chest')||h('bench')||h('fly')||h('push')) return 'pecho';
+  if(h('row')||h('pulldown')||h('lat')||h('pullup')||h('chin')) return 'espalda';
+  if(h('triceps')||h('dip')||h('pushdown')) return 'triceps';
+  if(h('curl')||h('biceps')||h('hammer')) return 'biceps';
+  if(h('shoulder')||h('lateral')||h('face')||h('delt')||h('raise')) return 'hombros';
+  if(h('plank')||h('crunch')||h('ab')||h('wheel')||h('dead')||h('hollow')||h('core')) return 'core';
+  if(h('hyperextension')||h('back')) return 'lumbar';
+  if(h('rope')||h('walking')||h('swimming')||h('stair')||h('running')||h('bike')||h('cycling')) return 'cardio';
+  return 'otro';
+}
+function guessEquip(title){
+  const t=nameTokens(title);
+  return t.has('smith')?'smith':t.has('dumbbell')?'mancuernas':t.has('machine')?'maquina':t.has('cable')?'polea':t.has('barbell')||t.has('ez')?'barra':t.has('band')?'banda':t.has('kettlebell')?'kettlebell':'otro';
+}
+/* Enlaza cada ejercicio de las sesiones con su hueco de la rutina (para «Rutina», sugerencias y cambios por alternativa) */
+function relinkItems(){
+  appState.sessions.forEach(s=>{
+    const rt=getRt(s.routineId); if(!rt) return;
+    const valid=en=>en.itemId&&rt.items.some(i=>i.id===en.itemId&&(i.exerciseId===en.exerciseId||i.alts.includes(en.exerciseId)));
+    const used=new Set(s.entries.filter(valid).map(e=>e.itemId));
+    s.entries.forEach(en=>{ if(valid(en)) return;
+      const it=rt.items.find(i=>!used.has(i.id)&&i.exerciseId===en.exerciseId)||rt.items.find(i=>!used.has(i.id)&&i.alts.includes(en.exerciseId));
+      en.itemId=it?it.id:''; if(it) used.add(it.id); });
+  });
+}
+/* Prepara la importación sin tocar los datos: sesiones nuevas y ejercicios que no reconoce (con propuesta) */
 function buildHevyImport(rows,st){
   if(!rows.length||!('exercise_title' in rows[0])||!('start_time' in rows[0])) throw new Error('El archivo no parece una exportación de entrenamientos de Hevy.');
-  const byHevy=new Map(); st.exercises.forEach(e=>e.hevy.forEach(h=>byHevy.set(norm(h),e))); st.exercises.forEach(e=>{ if(!byHevy.has(norm(e.name))) byHevy.set(norm(e.name),e); });
+  const byName=new Map(); st.exercises.forEach(e=>exAliases(e).forEach(n=>{ const k=norm(n); if(!byName.has(k)||e.id.startsWith('ex:')) byName.set(k,e); }));
   const rtBy=new Map(st.routines.map(r=>[norm(r.name),r]));
   const have=new Set(st.sessions.map(s=>s.startedAt.slice(0,16)+'|'+norm(s.name)));
-  const newEx=[], groups=[], gmap=new Map(); let bad=0;
-  rows.forEach(r=>{
-    const k=r.title+'\u0001'+r.start_time;
-    let g=gmap.get(k); if(!g){ g={title:r.title,start:r.start_time,end:r.end_time,desc:r.description,rows:[]}; gmap.set(k,g); groups.push(g); }
-    g.rows.push(r);
-  });
-  const sessions=[]; let skipped=0;
+  const groups=[], gmap=new Map(); let bad=0;
+  rows.forEach(r=>{ const k=r.title+'\u0001'+r.start_time; let g=gmap.get(k); if(!g){ g={title:r.title,start:r.start_time,end:r.end_time,desc:r.description,rows:[]}; gmap.set(k,g); groups.push(g); } g.rows.push(r); });
+  const sessions=[], unknown=[], unk=new Map(); let skipped=0;
+  const lbs='weight_lbs' in rows[0]&&!('weight_kg' in rows[0]);
   groups.forEach(g=>{
     const a=parseHevyDate(g.start), b=parseHevyDate(g.end);
     if(!a){ bad++; return; }
@@ -2945,22 +3089,45 @@ function buildHevyImport(rows,st){
     let cur=null, lastTitle=null;
     g.rows.forEach(r=>{
       const title=String(r.exercise_title||'').trim(); if(!title) return;
-      let ex=byHevy.get(norm(title));
-      if(!ex){
-        const num=k=>parseNum(r[k]);
-        const type=num('duration_seconds')!=null&&num('reps')==null?(num('distance_km')!=null?'distancia':'tiempo'):(num('weight_kg')!=null?'peso_reps':'reps');
-        ex=normalizeExercise({id:newId(),name:title,muscle:'otro',type,hevy:[title]}); newEx.push(ex); byHevy.set(norm(title),ex);
+      const num=k=>parseNum(r[k]);
+      let exId; const ex=byName.get(norm(title));
+      if(ex) exId=ex.id;
+      else {
+        let u=unk.get(norm(title));
+        if(!u){ const type=num('duration_seconds')!=null&&num('reps')==null?(num('distance_km')!=null?'distancia':'tiempo'):(num(lbs?'weight_lbs':'weight_kg')!=null?'peso_reps':'reps');
+          u={idx:unknown.length,title,type,n:0,sug:bestMatch(title)}; unk.set(norm(title),u); unknown.push(u); }
+        exId='?'+u.idx;
       }
-      if(!cur||title!==lastTitle){
-        const it=rt&&(rt.items.find(i=>i.exerciseId===ex.id&&!s.entries.some(e=>e.itemId===i.id))||rt.items.find(i=>i.alts.includes(ex.id)&&!s.entries.some(e=>e.itemId===i.id)));
-        cur={id:newId(),exerciseId:ex.id,itemId:it?it.id:'',unit:'kg',note:String(r.exercise_notes||'').trim(),sets:[]}; s.entries.push(cur); lastTitle=title;
-      }
+      if(!cur||title!==lastTitle){ if(exId.startsWith('?')) unknown[+exId.slice(1)].n++; cur={id:newId(),exerciseId:exId,itemId:'',unit:lbs?'lb':'kg',note:String(r.exercise_notes||'').trim(),sets:[]}; s.entries.push(cur); lastTitle=title; }
       if(!cur.note&&r.exercise_notes) cur.note=String(r.exercise_notes).trim();
-      cur.sets.push({id:newId(),kind:KIND_HEVY[String(r.set_type||'normal').toLowerCase()]||'normal',kg:parseNum(r.weight_kg),reps:parseNum(r.reps),secs:parseNum(r.duration_seconds),km:parseNum(r.distance_km),done:true});
+      const kg=lbs?(num('weight_lbs')!=null?fromUnit(num('weight_lbs'),'lb'):null):num('weight_kg');
+      cur.sets.push({id:newId(),kind:KIND_HEVY[norm(r.set_type||'normal')]||'normal',kg,reps:num('reps'),secs:num('duration_seconds'),km:num('distance_km'),done:true});
     });
     if(s.entries.length) sessions.push(normalizeSession(s));
   });
-  return {sessions,newEx,skipped,bad};
+  return {sessions,unknown,skipped,bad};
+}
+/* Aplica la importación con las elecciones del usuario: id de un ejercicio existente o 'new' */
+function applyHevyImport(res,choice){
+  const ids={};
+  res.unknown.forEach(u=>{
+    const c=choice[u.idx], ex=c&&c!=='new'?getEx(c):null;
+    if(ex){ if(!ex.hevy.some(h=>norm(h)===norm(u.title))) ex.hevy=[...ex.hevy,u.title].slice(-20); ids[u.idx]=ex.id; }
+    else { const nx=normalizeExercise({id:newId(),name:u.title,muscle:guessMuscle(u.title),equipment:guessEquip(u.title),type:u.type,hevy:[u.title]}); appState.exercises.push(nx); ids[u.idx]=nx.id; }
+  });
+  res.sessions.forEach(s=>s.entries.forEach(en=>{ if(en.exerciseId.startsWith('?')) en.exerciseId=ids[en.exerciseId.slice(1)]; }));
+  appState.sessions.push(...res.sessions);
+  appState.sessions.sort((a,b)=>b.startedAt.localeCompare(a.startedAt));
+  relinkItems();
+}
+/* Selector «a qué ejercicio corresponde» con la propuesta primero */
+function matchSelect(sug,current,{keepLabel}={}){
+  const sel=el('select');
+  if(keepLabel) sel.append(opt('keep',keepLabel,!sug));
+  sel.append(opt('new',keepLabel?'Crear como ejercicio nuevo':'Crear ejercicio nuevo',!keepLabel&&!sug));
+  if(sug) sel.append(opt(sug.ex.id,'≈ '+sug.ex.name,true));
+  appState.exercises.filter(e=>!e.archived&&e!==current&&(!sug||e.id!==sug.ex.id)).sort((a,b)=>a.name.localeCompare(b.name,'es')).forEach(e=>sel.append(opt(e.id,e.name)));
+  return sel;
 }
 function pickHevyFile(){ const f=$('fileInput'); f.accept='.csv,text/csv'; f.value=''; f.onchange=()=>{ const file=f.files[0]; if(file) readHevy(file); }; f.click(); }
 function readHevy(file){
@@ -2969,27 +3136,74 @@ function readHevy(file){
     let res;
     try{ res=buildHevyImport(parseCSV(rd.result),appState); }catch(e){ showToast('⚠️ '+(e.message||'No se ha podido leer el archivo'),{timeout:9000}); return; }
     const c=el('div');
-    if(!res.sessions.length){ c.append(el('p','muted',res.skipped?`Las ${res.skipped} sesiones del archivo ya estaban importadas.`:'El archivo no tiene sesiones.')); openSheet('Importar de Hevy',c,{actions:[btn('Cerrar','',null,()=>closeSheet())]}); return; }
+    if(!res.sessions.length){ c.append(el('p','muted',res.skipped?`Las ${res.skipped} sesiones del archivo ya estaban importadas. Si algún ejercicio quedó duplicado, usa Ajustes → «Revisar ejercicios importados».`:'El archivo no tiene sesiones.')); openSheet('Importar de Hevy',c,{actions:[btn('Cerrar','',null,()=>closeSheet())]}); return; }
     const dates=res.sessions.map(s=>s.date).sort();
     const sets=res.sessions.reduce((n,s)=>n+s.entries.reduce((m,en)=>m+en.sets.length,0),0);
     const ul=el('ul'); ul.style.paddingLeft='20px';
     [`${pl(res.sessions.length,'sesión nueva','sesiones nuevas')}, del ${fmtDMY(dates[0])} al ${fmtDMY(dates[dates.length-1])}`,`${fmtNum(sets,0)} series`,
      res.skipped?`${pl(res.skipped,'sesión ya estaba','sesiones ya estaban')} y se ${res.skipped===1?'salta':'saltan'}`:'',
-     res.newEx.length?`${pl(res.newEx.length,'ejercicio nuevo','ejercicios nuevos')}: ${res.newEx.map(e=>e.name).join(', ')}`:'',
      res.bad?`${pl(res.bad,'sesión con fecha ilegible no se importa','sesiones con fecha ilegible no se importan')}`:'']
      .filter(Boolean).forEach(t=>ul.append(el('li','',t)));
     c.append(ul);
+    const choice={};
+    if(res.unknown.length){
+      c.append(subHead(`Ejercicios sin reconocer (${res.unknown.length})`));
+      c.append(el('p','small muted','Elige a cuál de tus ejercicios corresponde cada uno. Con «≈» va mi propuesta; si no es ninguno, «Crear ejercicio nuevo». Se recordará para la próxima importación.'));
+      res.unknown.slice().sort((a,b)=>(b.sug?1:0)-(a.sug?1:0)||b.n-a.n).forEach(u=>{
+        const row=el('label','field'); row.style.marginTop='10px';
+        row.append(el('span','',`${u.title} · ${pl(u.n,'sesión','sesiones')}`));
+        const sel=matchSelect(u.sug); choice[u.idx]=sel.value; sel.addEventListener('change',()=>{ choice[u.idx]=sel.value; });
+        row.append(sel); c.append(row);
+      });
+    }
     openSheet('Importar de Hevy',c,{actions:[btn('Cancelar','secondary',null,()=>closeSheet()),btn('Importar','',null,()=>{
       closeSheet();
-      commit(`📥 ${pl(res.sessions.length,'sesión importada','sesiones importadas')} de Hevy`,()=>{
-        appState.exercises.push(...res.newEx);
-        appState.sessions.push(...res.sessions);
-        appState.sessions.sort((a,b)=>b.startedAt.localeCompare(a.startedAt));
-      });
+      commit(`📥 ${pl(res.sessions.length,'sesión importada','sesiones importadas')} de Hevy`,()=>applyHevyImport(res,choice));
     },'download')]});
   };
   rd.onerror=()=>showToast('⚠️ No se ha podido leer el archivo');
   rd.readAsText(file,'utf-8');
+}
+/* ---- Unir ejercicios duplicados (p. ej. «Aperturas (Máquina)» importado y «Aperturas en máquina (pec deck)») ---- */
+function mergeInto(src,dst){
+  if(!src||!dst||src===dst) return;
+  appState.sessions.forEach(s=>s.entries.forEach(en=>{ if(en.exerciseId===src.id) en.exerciseId=dst.id; }));
+  appState.routines.forEach(r=>r.items.forEach(it=>{ if(it.exerciseId===src.id) it.exerciseId=dst.id; it.alts=[...new Set(it.alts.map(a=>a===src.id?dst.id:a))].filter(a=>a!==it.exerciseId); }));
+  dst.hevy=[...new Set([...dst.hevy,...src.hevy,src.name].filter(n=>norm(n)!==norm(dst.name)))].slice(-20);
+  if(src.note&&!dst.note) dst.note=src.note;
+  appState.exercises=appState.exercises.filter(e=>e!==src);
+}
+function mergeSheet(src){
+  pickExercise(`Unir «${src.name}» con…`,id=>{
+    const dst=getEx(id); if(!dst||dst===src) return;
+    const n=exHistory(src.id).length;
+    confirmSheet('Unir ejercicios',`Las ${pl(n,'sesión','sesiones')} de «${src.name}» pasarán a «${dst.name}», que se queda con su ficha, notas y rutinas. «${src.name}» desaparece (se puede deshacer).`,'Unir',()=>{
+      commit(`⇄ Unido con ${dst.name}`,()=>{ mergeInto(src,dst); relinkItems(); });
+      nav('exercise',{exId:dst.id},{replace:true});
+    });
+  });
+}
+/* Ejercicios creados por una importación de Hevy (no vienen de serie y guardan su nombre de Hevy) */
+const importedExs=()=>appState.exercises.filter(e=>!e.id.startsWith('ex:')&&e.hevy.length&&!e.archived);
+function importReview(){ return importedExs().map(e=>({e,sug:bestMatch(e.name,x=>x===e||importedExs().includes(x))})).filter(x=>x.sug); }
+function reviewImported(){
+  const list=importedExs();
+  const c=el('div');
+  if(!list.length){ c.append(el('p','muted','No hay ejercicios creados al importar de Hevy.')); openSheet('Revisar ejercicios importados',c,{actions:[btn('Cerrar','',null,()=>closeSheet())]}); return; }
+  c.append(el('p','small muted','Estos ejercicios se crearon al importar de Hevy. Si son el mismo que uno tuyo, elige con cuál unirlos: su historial pasará a ese ejercicio. Con «≈» va mi propuesta.'));
+  const choice=new Map();
+  list.map(e=>({e,sug:bestMatch(e.name,x=>x===e||list.includes(x))})).sort((a,b)=>(b.sug?1:0)-(a.sug?1:0)).forEach(({e,sug})=>{
+    const row=el('label','field'); row.style.marginTop='10px';
+    row.append(el('span','',`${e.name} · ${pl(exHistory(e.id).length,'sesión','sesiones')}`));
+    const sel=matchSelect(sug,e,{keepLabel:'Dejar como está'}); [...sel.options].forEach(o=>{ if(o.value==='new') o.remove(); });
+    choice.set(e,sel.value); sel.addEventListener('change',()=>choice.set(e,sel.value));
+    row.append(sel); c.append(row);
+  });
+  openSheet('Revisar ejercicios importados',c,{actions:[btn('Cancelar','secondary',null,()=>closeSheet()),btn('Unir','',null,()=>{
+    const pairs=[...choice.entries()].filter(([,v])=>v&&v!=='keep');
+    closeSheet(); if(!pairs.length) return;
+    commit(`⇄ ${pl(pairs.length,'ejercicio unido','ejercicios unidos')}`,()=>{ pairs.forEach(([src,id])=>mergeInto(src,getEx(id))); relinkItems(); });
+  },'swap')]});
 }
 
 /* ================= Copias de seguridad ================= */
