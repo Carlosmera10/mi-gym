@@ -640,7 +640,7 @@ const FEEL_TXT={easy:'Fácil',good:'Bien',hard:'Al límite'}, FEEL_IC={easy:'lau
 const PAIN={lumbar:'Lumbar',hombro:'Hombro',rodilla:'Rodilla',codo:'Codo o muñeca',cuello:'Cuello',otra:'Otra'};
 const SEED_ABBR={'rt:piernas':'P','rt:torso':'TH','rt:fullbody':'FB','rt:comba':'CC','rt:sinimpacto':'SI'};
 const MODES=[{k:'full',t:'Completa',p:['E','I','P']},{k:'45',t:'45 min',p:['E','I']},{k:'30',t:'30 min',p:['E']}];
-const TOAST_ICON={'🏆':'trophy','📌':'pin','📝':'note','📁':'folder','➕':'plus','🗑️':'trash','✅':'check-circle','🔁':'repeat','💾':'save','📥':'download','📤':'upload','↩️':'undo','📲':'monitor-down','📅':'calendar','📦':'archive','⏱️':'timer','🏋️':'dumbbell','⚠️':'alert','✏️':'pencil','⧉':'copy','⇄':'swap','⚖️':'trend'};
+const TOAST_ICON={'🏆':'trophy','📌':'pin','📝':'note','📁':'folder','➕':'plus','🗑️':'trash','✅':'check-circle','🔁':'repeat','💾':'save','📥':'download','📤':'upload','↩️':'undo','📲':'monitor-down','📅':'calendar','📦':'archive','⏱️':'timer','🏋️':'dumbbell','⚠️':'alert','✏️':'pencil','⧉':'copy','⇄':'swap','🧹':'swap','⚖️':'trend'};
 
 /* ================= Utilidades ================= */
 const $=id=>document.getElementById(id);
@@ -667,6 +667,14 @@ function btn(text,cls,label,fn,icon){
   return b;
 }
 function chip(text,cls='',icon){ const c=el('span','chip '+cls); if(icon) c.append(ic(icon)); c.append(document.createTextNode(text)); return c; }
+/* Id fijo a partir de un texto: lo importado de Hevy recibe el mismo id en todos los dispositivos */
+function hashId(s){
+  const h=seed=>{ let a=0xdeadbeef^seed, b=0x41c6ce57^seed;
+    for(let i=0;i<s.length;i++){ const c=s.charCodeAt(i); a=Math.imul(a^c,2654435761); b=Math.imul(b^c,1597334677); }
+    a=Math.imul(a^(a>>>16),2246822507)^Math.imul(b^(b>>>13),3266489909); b=Math.imul(b^(b>>>16),2246822507)^Math.imul(a^(a>>>13),3266489909);
+    return (4294967296*(2097151&b)+(a>>>0)).toString(16).padStart(14,'0'); };
+  return h(1)+h(7);
+}
 function newId(){
   try{ if(window.crypto&&typeof crypto.randomUUID==='function') return crypto.randomUUID(); }catch(e){}
   const b=crypto.getRandomValues(new Uint8Array(16)); b[6]=(b[6]&15)|64; b[8]=(b[8]&63)|128;
@@ -794,11 +802,38 @@ function normalizeDeleted(d){
   return out;
 }
 function uniqById(list){ const seen=new Set(); return list.filter(x=>{ if(seen.has(x.id)) x.id=newId(); seen.add(x.id); return true; }); }
+/* Copias del mismo elemento con distinto id (p. ej. el CSV de Hevy importado en el móvil y en el PC, y luego fusionados).
+   Se queda un solo id, elegido solo por el id (todos los dispositivos eligen el mismo), con el contenido de la copia
+   modificada más tarde. Devuelve {id perdedor: id ganador}. */
+const fixedId=id=>/^h[vx]:/.test(id);
+const idRank=(a,b)=>(fixedId(b)-fixedId(a))||(a<b?-1:a>b?1:0);
+function collapseDupes(list,keyOf,mergeFn){
+  const groups=new Map(), map={};
+  list.forEach(x=>{ const k=keyOf(x); if(!k) return; if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(x); });
+  const drop=new Set();
+  groups.forEach(g=>{
+    if(g.length<2) return;
+    const keep=g.slice().sort((a,b)=>idRank(a.id,b.id))[0];
+    const newest=g.slice().sort((a,b)=>tsOf(b.updatedAt)-tsOf(a.updatedAt)||idRank(a.id,b.id))[0];
+    const keepId=keep.id, upd=newest.updatedAt;
+    if(newest!==keep){ Object.keys(keep).forEach(k=>delete keep[k]); Object.assign(keep,clone(newest)); keep.id=keepId; keep.updatedAt=upd; }
+    g.forEach(x=>{ if(x===keep) return; if(mergeFn) mergeFn(keep,x); map[x.id]=keepId; drop.add(x); });
+  });
+  return {list:drop.size?list.filter(x=>!drop.has(x)):list,map};
+}
+let lastDedupe={sessions:0,exercises:0};
 function normalizeState(x){
   if(!x||typeof x!=='object'||!Array.isArray(x.exercises)) return null;
-  const exercises=uniqById(x.exercises.filter(e=>e&&typeof e==='object').map(normalizeExercise));
+  const tomb=normalizeDeleted(x.deleted), nowIso=new Date().toISOString();
+  let exercises=uniqById(x.exercises.filter(e=>e&&typeof e==='object').map(normalizeExercise));
+  /* Ejercicios propios repetidos (mismo nombre y tipo; los de serie tienen id fijo y no se tocan) */
+  const exD=collapseDupes(exercises,e=>e.id.startsWith('ex:')?'':norm(e.name)+'|'+e.type,(keep,x)=>{
+    keep.hevy=[...new Set([...keep.hevy,...x.hevy])].slice(-20); if(!keep.note&&x.note) keep.note=x.note; if(!keep.tech&&x.tech) keep.tech=x.tech; });
+  exercises=exD.list;
+  const exMap=exD.map, remapEx=id=>exMap[id]||id;
   const exIds=new Set(exercises.map(e=>e.id));
   const routines=uniqById((Array.isArray(x.routines)?x.routines:[]).map(normalizeRoutine));
+  if(Object.keys(exMap).length) routines.forEach(r=>r.items.forEach(it=>{ it.exerciseId=remapEx(it.exerciseId); it.alts=[...new Set(it.alts.map(remapEx))]; }));
   /* Carpetas. Los datos anteriores a las carpetas pasan todos a «Rutina normal» (mismo id en todos los dispositivos) */
   let folders;
   if(Array.isArray(x.folders)) folders=uniqById(x.folders.map(normalizeFolder));
@@ -808,13 +843,19 @@ function normalizeState(x){
   const usedC=new Set(routines.map(r=>r.color).filter(c=>c>=0));
   routines.forEach(r=>{ if(r.color<0){ let c=0; while(usedC.has(c)&&c<8) c++; r.color=c<8?c:usedC.size%8; usedC.add(r.color); } });
   routines.forEach(r=>{ r.items=uniqById(r.items.filter(it=>exIds.has(it.exerciseId))); r.items.forEach(it=>{ it.alts=it.alts.filter(a=>exIds.has(a)&&a!==it.exerciseId); }); });
-  const sessions=uniqById((Array.isArray(x.sessions)?x.sessions:[]).map(normalizeSession));
+  let sessions=uniqById((Array.isArray(x.sessions)?x.sessions:[]).map(normalizeSession));
+  if(Object.keys(exMap).length) sessions.forEach(s=>s.entries.forEach(e=>{ e.exerciseId=remapEx(e.exerciseId); }));
+  /* Sesiones repetidas: misma hora de inicio (al minuto) y mismo nombre */
+  const sD=collapseDupes(sessions,s=>s.startedAt.slice(0,16)+'|'+norm(s.name));
+  sessions=sD.list;
+  [exMap,sD.map].forEach(m=>Object.keys(m).forEach(id=>{ if(!tomb[id]) tomb[id]=nowIso; }));
+  lastDedupe={sessions:Object.keys(sD.map).length,exercises:Object.keys(exMap).length};
   sessions.forEach(s=>{ s.entries=uniqById(s.entries.filter(e=>exIds.has(e.exerciseId))); s.entries.forEach(e=>uniqById(e.sets)); });
   /* Solo una sesión en curso: si hubiera más (p. ej. tras sincronizar), se cierran las antiguas */
   const live=sessions.filter(s=>!s.endedAt).sort((a,b)=>b.startedAt.localeCompare(a.startedAt));
   live.slice(1).forEach(s=>{ s.endedAt=s.startedAt; });
   sessions.sort((a,b)=>b.startedAt.localeCompare(a.startedAt));
-  return {version:STATE_VERSION,exercises,folders,routines,sessions,settings:normalizeSettings(x.settings),deleted:normalizeDeleted(x.deleted)};
+  return {version:STATE_VERSION,exercises,folders,routines,sessions,settings:normalizeSettings(x.settings),deleted:tomb};
 }
 function blankState(){
   return normalizeState({exercises:clone(SEED.exercises),routines:clone(SEED.routines),sessions:[],settings:{},deleted:{}});
@@ -865,6 +906,7 @@ function idbOpen(){
 const idbGet=k=>idbOpen().then(db=>new Promise((res,rej)=>{ const q=db.transaction(IDB_STORE,'readonly').objectStore(IDB_STORE).get(k); q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); }));
 const idbPut=(k,v)=>idbOpen().then(db=>new Promise((res,rej)=>{ const t=db.transaction(IDB_STORE,'readwrite'); t.objectStore(IDB_STORE).put(v,k); t.oncomplete=()=>res(); t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error||new Error('operación cancelada')); }));
 
+let bootDedupe={sessions:0,exercises:0};
 let storeReady=false, storeMode='idb', persisting=false, persistAgain=false, lastJson='', saveErrorShown=false;
 const bc=('BroadcastChannel' in window)?new BroadcastChannel('migym_tabs'):null;
 function showSaveError(){
@@ -900,6 +942,7 @@ async function bootStore(){
     if(raw){
       try{ st=normalizeState(JSON.parse(raw)); }catch(e){}
       if(!st) await idbPut('state_ilegible_'+Date.now(),raw);
+      else bootDedupe=lastDedupe;
     }
     storeMode='idb';
     try{ if(navigator.storage&&navigator.storage.persist) navigator.storage.persist(); }catch(e){}
@@ -910,7 +953,7 @@ async function bootStore(){
   appState=st||blankState();
   baseSigs=sigsOf(indexState(appState));
   storeReady=true;
-  if(!st) persist();
+  if(!st||bootDedupe.sessions||bootDedupe.exercises) persist();
 }
 if(bc) bc.onmessage=async()=>{
   if(!storeReady||storeMode!=='idb') return;
@@ -3201,7 +3244,8 @@ function buildHevyImport(rows,st){
     const name=String(g.title||'').trim()||'Entrenamiento';
     if(have.has(a.toISOString().slice(0,16)+'|'+norm(name))){ skipped++; return; }
     const rt=rtBy.get(norm(name))||null;
-    const s={id:newId(),routineId:rt?rt.id:'',name,date:ymd(a),startedAt:a.toISOString(),endedAt:(b&&b>=a?b:a).toISOString(),notes:String(g.desc||'').trim(),src:'hevy',entries:[]};
+    const sid='hv:'+hashId(a.toISOString().slice(0,16)+'|'+norm(name));
+    const s={id:sid,routineId:rt?rt.id:'',name,date:ymd(a),startedAt:a.toISOString(),endedAt:(b&&b>=a?b:a).toISOString(),notes:String(g.desc||'').trim(),src:'hevy',entries:[]};
     let cur=null, lastTitle=null;
     g.rows.forEach(r=>{
       const title=String(r.exercise_title||'').trim(); if(!title) return;
@@ -3214,10 +3258,10 @@ function buildHevyImport(rows,st){
           u={idx:unknown.length,title,type,n:0,sug:bestMatch(title)}; unk.set(norm(title),u); unknown.push(u); }
         exId='?'+u.idx;
       }
-      if(!cur||title!==lastTitle){ if(exId.startsWith('?')) unknown[+exId.slice(1)].n++; cur={id:newId(),exerciseId:exId,itemId:'',unit:lbs?'lb':'kg',note:String(r.exercise_notes||'').trim(),sets:[]}; s.entries.push(cur); lastTitle=title; }
+      if(!cur||title!==lastTitle){ if(exId.startsWith('?')) unknown[+exId.slice(1)].n++; cur={id:sid+':'+s.entries.length,exerciseId:exId,itemId:'',unit:lbs?'lb':'kg',note:String(r.exercise_notes||'').trim(),sets:[]}; s.entries.push(cur); lastTitle=title; }
       if(!cur.note&&r.exercise_notes) cur.note=String(r.exercise_notes).trim();
       const kg=lbs?(num('weight_lbs')!=null?fromUnit(num('weight_lbs'),'lb'):null):num('weight_kg');
-      cur.sets.push({id:newId(),kind:KIND_HEVY[norm(r.set_type||'normal')]||'normal',kg,reps:num('reps'),secs:num('duration_seconds'),km:num('distance_km'),done:true});
+      cur.sets.push({id:cur.id+':'+cur.sets.length,kind:KIND_HEVY[norm(r.set_type||'normal')]||'normal',kg,reps:num('reps'),secs:num('duration_seconds'),km:num('distance_km'),done:true});
     });
     if(s.entries.length) sessions.push(normalizeSession(s));
   });
@@ -3229,7 +3273,8 @@ function applyHevyImport(res,choice){
   res.unknown.forEach(u=>{
     const c=choice[u.idx], ex=c&&c!=='new'?getEx(c):null;
     if(ex){ if(!ex.hevy.some(h=>norm(h)===norm(u.title))) ex.hevy=[...ex.hevy,u.title].slice(-20); ids[u.idx]=ex.id; }
-    else { const nx=normalizeExercise({id:newId(),name:u.title,muscle:guessMuscle(u.title),equipment:guessEquip(u.title),type:u.type,hevy:[u.title]}); appState.exercises.push(nx); ids[u.idx]=nx.id; }
+    else { let nid='hx:'+hashId(norm(u.title)); if(getEx(nid)) nid=newId();
+      const nx=normalizeExercise({id:nid,name:u.title,muscle:guessMuscle(u.title),equipment:guessEquip(u.title),type:u.type,hevy:[u.title]}); appState.exercises.push(nx); ids[u.idx]=nx.id; }
   });
   res.sessions.forEach(s=>s.entries.forEach(en=>{ if(en.exerciseId.startsWith('?')) en.exerciseId=ids[en.exerciseId.slice(1)]; }));
   appState.sessions.push(...res.sessions);
@@ -3323,6 +3368,10 @@ function reviewImported(){
 }
 
 /* ================= Copias de seguridad ================= */
+function dedupeMsg(d){
+  const p=[]; if(d.sessions) p.push(pl(d.sessions,'sesión repetida','sesiones repetidas')); if(d.exercises) p.push(pl(d.exercises,'ejercicio repetido','ejercicios repetidos'));
+  return 'Unidas '+p.join(' y ');
+}
 function backupBlob(){ return new Blob([JSON.stringify(Object.assign({app:'mi-gym',exportedAt:new Date().toISOString()},appState),null,1)],{type:'application/json;charset=utf-8'}); }
 const backupName=()=>`mi-gym-copia-${todayStr()}.json`;
 function markBackup(){ appState.settings.lastBackup=new Date().toISOString(); appState.settings.backupSnooze=''; save(); }
@@ -3348,7 +3397,8 @@ function readBackup(file){
     let st=null; try{ st=normalizeState(JSON.parse(rd.result)); }catch(e){}
     if(!st){ showToast('⚠️ El archivo no es una copia de Mi Gym',{timeout:8000}); return; }
     const c=el('div'); c.append(el('p','muted',`La copia tiene ${pl(st.sessions.length,'sesión','sesiones')}, ${pl(st.routines.length,'rutina','rutinas')} y ${pl(st.exercises.length,'ejercicio','ejercicios')}.`));
-    c.append(sheetItem('repeat','Fusionar con lo que hay',()=>{ closeSheet(); commit('📥 Copia fusionada',()=>{ const m=mergeStates(appState,st); m.settings=appState.settings; appState=m; }); },{small:'recomendado'}));
+    c.append(sheetItem('repeat','Fusionar con lo que hay',()=>{ closeSheet(); commit('📥 Copia fusionada',()=>{ const n0=appState.sessions.length, m=mergeStates(appState,st), d=lastDedupe; m.settings=appState.settings; appState=m;
+      const add=appState.sessions.length-n0; return '📥 Copia fusionada: '+(add>0?pl(add,'sesión nueva','sesiones nuevas'):'ninguna sesión nueva')+(d.sessions||d.exercises?' · '+dedupeMsg(d).toLowerCase():''); }); },{small:'recomendado'}));
     c.append(sheetItem('alert','Sustituir todo por la copia',()=>{ closeSheet(); confirmSheet('Sustituir todos los datos','Se perderá lo que no esté en la copia (se puede deshacer justo después).','Sustituir',()=>commit('📥 Datos sustituidos por la copia',()=>{ const keep=appState.settings, del=Object.assign({},appState.deleted,st.deleted); appState=st; appState.settings=keep; appState.deleted=del; }),{danger:true}); },{cls:'danger'}));
     openSheet('Importar copia',c);
   };
@@ -3376,14 +3426,15 @@ $('scrim').addEventListener('click',()=>closeSheet());
 try{ mqDesk.addEventListener('change',()=>renderApp({top:true})); }catch(e){}
 
 /* ================= Arranque ================= */
-window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,suggestFor,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState};
+window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,applyHevyImport,hashId,suggestFor,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState};
 (async function boot(){
   applyTheme();
   await bootStore();
   if(!VIEWS[ui.view]) ui.view='train';
   try{ history.replaceState(histState(0),''); }catch(e){}
   renderApp({top:true});
-  setTimeout(backupReminder,4000);
+  if(bootDedupe.sessions||bootDedupe.exercises) showToast('🧹 '+dedupeMsg(bootDedupe),{timeout:10000});
+  else setTimeout(backupReminder,4000);
   if('serviceWorker' in navigator&&location.protocol==='https:'){
     navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).then(r=>{ swReg=r; }).catch(()=>{});
   }
