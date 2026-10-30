@@ -235,6 +235,21 @@ table.sets-t td.k{color:var(--muted);width:44px}
 .set-line:first-of-type{border-top:0}
 .set-line .lbl{flex:1;min-width:180px}
 .set-line input.num{width:96px;text-align:center}
+.sync-status{display:flex;align-items:flex-start;gap:8px;font-weight:600;color:var(--done)}
+.sync-status::before{content:"";width:9px;height:9px;border-radius:50%;background:currentColor;flex-shrink:0;margin-top:.45em}
+.sync-status.bad{color:var(--danger)}
+.sync-status.busy{color:var(--muted)}
+#syncStatus:empty{display:none}
+.sync-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px;align-items:end}
+.sync-form .sync-err,.sync-form .row{grid-column:1/-1}
+.sync-err{color:var(--danger);font-weight:600;font-size:.9rem}
+.sync-help{margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
+.sync-help summary{cursor:pointer;font-weight:600;color:var(--accent-ink);padding:6px 0;min-height:32px}
+.sync-help ol{margin:8px 0 10px;padding-left:22px;display:flex;flex-direction:column;gap:6px}
+.nav-btn{position:relative}
+body.sync-error [data-view=settings]::after{content:"";position:absolute;width:9px;height:9px;border-radius:50%;background:var(--danger);box-shadow:0 0 0 2px var(--nav)}
+body.sync-error .nav-btn[data-view=settings]::after{top:10px;left:26px}
+body.sync-error .bottom-nav [data-view=settings]::after{top:6px;left:calc(50% + 8px)}
 .switch{position:relative;width:46px;height:28px;border-radius:99px;background:var(--track);padding:0;min-height:0;border:0;flex-shrink:0}
 .switch::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .15s}
 .switch:hover{background:var(--line-strong)}
@@ -479,6 +494,7 @@ body.split-on main{padding-bottom:0}
 
 /* ================= Móvil ================= */
 @media(max-width:760px){
+  .sync-form{grid-template-columns:minmax(0,1fr)}
   .app{display:block}
   .sidebar{display:none}
   main{padding:0 12px calc(96px + env(safe-area-inset-bottom))}
@@ -585,6 +601,7 @@ body.split-on main{padding-bottom:0}
   <symbol id="i-shrink" viewBox="0 0 24 24"><path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8"/><path d="M9 19.8V15m0 0H4.2M9 15l-6 6"/><path d="M15 4.2V9m0 0h4.8M15 9l6-6"/><path d="M9 4.2V9m0 0H4.2M9 9 3 3"/></symbol>
   <symbol id="i-expand" viewBox="0 0 24 24"><path d="m21 21-6-6m6 6v-4.8m0 4.8h-4.8"/><path d="M3 16.2V21m0 0h4.8M3 21l6-6"/><path d="M21 7.8V3m0 0h-4.8M21 3l-6 6"/><path d="M3 7.8V3m0 0h4.8M3 3l6 6"/></symbol>
   <symbol id="i-flame" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
   <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
  </defs>
 </svg>
@@ -917,8 +934,9 @@ let dataRev=0;
 function save(){
   if(!storeReady) return;
   dataRev++;
-  stampChanges(appState);
+  const changed=stampChanges(appState);
   persist();
+  if(changed&&syncCfg) scheduleSync();
 }
 function persist(){
   if(storeMode==='ls'){
@@ -2107,6 +2125,7 @@ function restFired(){
   }
 }
 function tick(){
+  if(renderPending&&appState&&!uiBusy()){ renderPending=false; renderApp(); }
   document.querySelectorAll('[data-elapsed]').forEach(e=>{ const l=liveSession(); if(l) e.textContent=fmtClock((Date.now()-tsOf(l.startedAt))/1000); });
   const r=ui.rest, bar=$('restBar');
   if(r&&!bar.hidden){
@@ -2961,6 +2980,8 @@ function renderSettings(main){
   line(pr,'Subida de peso en kg',numIn(fmtNum(st.kgStep,2),v=>setSetting('kgStep',parseNum(v)??2.5),'decimal'),'Si el ejercicio no tiene historial ni salto propio');
   line(pr,'Subida de peso en lb',numIn(fmtNum(st.lbStep,2),v=>setSetting('lbStep',parseNum(v)??5),'decimal'));
 
+  renderSyncSection(sec('refresh','Sincronización con el otro dispositivo'));
+
   const d=sec('save','Datos y copias');
   const nS=finished().length;
   line(d,'Importar historial de Hevy',btn('Elegir CSV','secondary',null,pickHevyFile,'download'),'En Hevy: Perfil → Settings → Export & Import Data → Export Data → Export Workouts');
@@ -3047,6 +3068,15 @@ function renderHelp(main){
      ['Nombres:','los ejercicios se reconocen en inglés o en español. Los que no reconoce aparecen en una lista para que elijas a cuál de los tuyos corresponden (con «≈» va la propuesta) o crear uno nuevo; la elección se recuerda.'],
      ['Duplicados:','si ya importaste y un ejercicio quedó repetido, Ajustes → «Revisar ejercicios importados», o en el ejercicio, ⋯ → «Unir con otro ejercicio…».'],
      ['Repetir la importación','no duplica nada: las sesiones que ya estaban se saltan.']],true);
+  H('Sincronización entre el móvil y el ordenador');
+  L([['Qué hace:','mantiene los mismos datos en todos tus dispositivos. Se guarda una copia cifrada en un Gist secreto de tu cuenta de GitHub; la contraseña de cifrado solo está en tus dispositivos.'],
+     ['Activarla:','Ajustes → «Sincronización con el otro dispositivo». Los pasos para crear el token de GitHub están en el desplegable «Cómo crear el token de GitHub». En el otro dispositivo, el mismo token y la misma contraseña.'],
+     ['Cuándo sincroniza:','al abrir la app, unos segundos después de cada cambio, al volver a la app, al recuperar la conexión y cada 3 minutos. También al minimizarla si quedaba algo por enviar. Sin conexión sigue funcionando y envía los cambios al volver.'],
+     ['Si cambias lo mismo en los dos:','en cada sesión, rutina o ejercicio gana el último cambio. Un borrado gana, salvo que el elemento se modificara después en el otro dispositivo.'],
+     ['Lo que no se sincroniza:','los ajustes (descanso, sonido, saltos de peso), el tema y lo que tienes abierto o plegado: cada dispositivo tiene los suyos.'],
+     ['Punto rojo en Ajustes:','la sincronización está en pausa (token caducado o contraseña distinta). Abre Ajustes para ver el motivo y corregirlo. Los cortes de conexión se reintentan solos.'],
+     ['Token caducado:','crea otro con los mismos pasos, y en Ajustes → «Cambiar token o contraseña» pégalo y pulsa «Guardar cambios» (en los dos dispositivos).'],
+     ['Desactivar','borra el token y la contraseña de este dispositivo; no toca tus datos ni la copia de GitHub. No borres ni edites el Gist «Mi Gym · copia cifrada».']]);
   H('Copias de seguridad');
   L(['Ajustes → «Exportar copia de seguridad» descarga un archivo con todos tus datos.',
      '«Importar copia» permite fusionar (lo más reciente de cada elemento) o sustituir todo.',
@@ -3412,6 +3442,307 @@ function backupReminder(){
   showToast(last?'💾 Hace más de un mes de la última copia de seguridad':'💾 Aún no has exportado ninguna copia de seguridad',{action:'Exportar',fn:exportData,timeout:12000});
 }
 
+/* ================= Sincronización (Gist secreto de GitHub, cifrado en el navegador) ================= */
+const SYNC_FILE='migym-sync.json', SYNC_DESC='Mi Gym · copia cifrada (no borrar ni editar)', PBKDF2_ITER=600000, AAD='mi-gym|1';
+const SYNC_HALT=['token','password','perm','version','format'];
+function syncErr(kind,msg){ const e=new Error(msg); e.kind=kind; return e; }
+/* Huella del contenido sincronizable (sin orden, ajustes ni interfaz): si no cambia, no se escribe en GitHub */
+function fingerprint(st){
+  const parts=[]; indexState(st).forEach((e,k)=>parts.push(k+'\u0001'+(e.ref.updatedAt||'')+'\u0001'+e.sig));
+  parts.sort(); Object.keys(st.deleted||{}).sort().forEach(k=>parts.push('D'+k+'\u0001'+st.deleted[k]));
+  return hashId(parts.join('\u0002'));
+}
+/* Un dispositivo recién estrenado adopta lo de GitHub tal cual */
+function adoptRemote(remote,local){ const st=clone(remote); st.settings=local.settings; return normalizeState(st); }
+/* Mientras se escribe, hay una hoja abierta o se arrastra, no se cambian los datos por debajo: se reintenta después */
+const uiBusy=()=>isTyping()||sheetOpen||!!dnd;
+function applyMerged(st){
+  appState=st; baseSigs=sigsOf(indexState(st)); undoStack.length=0; dataRev++;
+  persist(); renderApp();
+}
+
+/* ---- Cifrado: PBKDF2-SHA256 (600 000 vueltas) → AES-GCM de 256 bits ---- */
+const te=new TextEncoder(), td=new TextDecoder();
+const b64e=u8=>{ let s=''; for(let i=0;i<u8.length;i+=0x8000) s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000)); return btoa(s); };
+const b64d=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const keyCache={id:'',key:null};
+async function deriveKey(pass,salt,iter){
+  const id=pass+'|'+b64e(salt)+'|'+iter;
+  if(keyCache.id===id) return keyCache.key;
+  const base=await crypto.subtle.importKey('raw',te.encode(pass),'PBKDF2',false,['deriveKey']);
+  const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:iter,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  keyCache.id=id; keyCache.key=key; return key;
+}
+async function pipeBytes(u8,stream){
+  const w=stream.writable.getWriter(); w.write(u8).catch(()=>{}); w.close().catch(()=>{});
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+}
+async function encryptState(st,saltB64,pass=syncCfg.pass){
+  const payload={app:'mi-gym',v:1,version:STATE_VERSION,savedAt:new Date().toISOString(),
+    exercises:st.exercises,folders:st.folders,routines:st.routines,sessions:st.sessions,deleted:st.deleted};
+  const raw=te.encode(JSON.stringify(payload)); let bytes=raw, z=0;
+  if(typeof CompressionStream==='function'){ try{ bytes=await pipeBytes(raw,new CompressionStream('gzip')); z=1; }catch(e){ bytes=raw; z=0; } }
+  const salt=saltB64?b64d(saltB64):crypto.getRandomValues(new Uint8Array(16)), iv=crypto.getRandomValues(new Uint8Array(12));
+  const key=await deriveKey(pass,salt,PBKDF2_ITER);
+  const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:te.encode(AAD)},key,bytes));
+  return JSON.stringify({app:'mi-gym',v:1,kdf:'PBKDF2-SHA256',iter:PBKDF2_ITER,salt:b64e(salt),iv:b64e(iv),z,data:b64e(ct)});
+}
+async function decryptEnv(text,pass=syncCfg.pass){
+  const bad=()=>syncErr('format','Los datos guardados en GitHub no tienen el formato esperado.');
+  let env; try{ env=JSON.parse(text); }catch(e){ throw bad(); }
+  if(!env||env.app!=='mi-gym'||!env.data||!env.salt||!env.iv) throw bad();
+  const newer=()=>syncErr('version','Los datos de GitHub los guardó una versión más nueva de la app. Cierra la app y ábrela de nuevo para actualizarla.');
+  if(env.v!==1) throw newer();
+  const key=await deriveKey(pass,b64d(env.salt),env.iter||PBKDF2_ITER);
+  let plain;
+  try{ plain=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:b64d(env.iv),additionalData:te.encode(AAD)},key,b64d(env.data))); }
+  catch(e){ throw syncErr('password','La contraseña de cifrado no coincide con la de los datos guardados en GitHub.'); }
+  if(env.z){
+    if(typeof DecompressionStream!=='function') throw syncErr('version','Este navegador no puede leer los datos comprimidos de GitHub. Actualiza Chrome.');
+    try{ plain=await pipeBytes(plain,new DecompressionStream('gzip')); }catch(e){ throw bad(); }
+  }
+  let obj; try{ obj=JSON.parse(td.decode(plain)); }catch(e){ throw bad(); }
+  if(obj&&obj.version>STATE_VERSION) throw newer();
+  const st=obj&&normalizeState({exercises:obj.exercises,folders:obj.folders,routines:obj.routines,sessions:obj.sessions,deleted:obj.deleted,settings:{}});
+  if(!st) throw bad();
+  return {st,salt:env.salt};
+}
+
+/* ---- API de GitHub (Gists) ---- */
+async function gh(path,opts={}){
+  let res;
+  try{
+    res=await fetch('https://api.github.com'+path,{method:opts.method||'GET',cache:'no-store',
+      headers:Object.assign({Accept:'application/vnd.github+json',Authorization:'Bearer '+syncCfg.token},opts.body?{'Content-Type':'application/json'}:{}),
+      body:opts.body?JSON.stringify(opts.body):undefined});
+  }catch(e){ throw syncErr('network','No se ha podido conectar con GitHub.'); }
+  if(res.ok) return res;
+  if(res.status===401) throw syncErr('token','El token de GitHub no es válido o ha caducado.');
+  if(res.status===403||res.status===429){
+    if(res.status===429||res.headers.get('x-ratelimit-remaining')==='0') throw syncErr('limit','GitHub ha limitado las peticiones por un rato. Se reintentará solo.');
+    throw syncErr('perm','El token no tiene permiso para los Gists. Créalo de nuevo con «Gists: Read and write».');
+  }
+  if(res.status===404) throw syncErr('notfound','No se encuentra el Gist de sincronización.');
+  if(res.status>=500) throw syncErr('network','GitHub no responde ahora mismo ('+res.status+').');
+  throw syncErr('http','GitHub ha respondido con un error ('+res.status+').');
+}
+/* Busca el Gist de la app en la cuenta; si hay varios, el más antiguo (así todos los dispositivos eligen el mismo) */
+async function findGist(){
+  let best=null;
+  for(let page=1;page<=10;page++){
+    const list=await (await gh(`/gists?per_page=100&page=${page}`)).json();
+    if(!Array.isArray(list)) break;
+    list.forEach(g=>{ if(g&&g.files&&g.files[SYNC_FILE]&&(!best||tsOf(g.created_at)<tsOf(best.created_at))) best=g; });
+    if(list.length<100) break;
+  }
+  return best?best.id:'';
+}
+async function readGist(id){
+  const g=await (await gh('/gists/'+encodeURIComponent(id))).json(), f=g&&g.files&&g.files[SYNC_FILE];
+  if(!f) return null;
+  if(f.truncated||typeof f.content!=='string'){
+    let r; try{ r=await fetch(f.raw_url,{cache:'no-store'}); }catch(e){ throw syncErr('network','No se ha podido conectar con GitHub.'); }
+    if(!r.ok) throw syncErr('network','GitHub ha respondido con un error ('+r.status+').');
+    return r.text();
+  }
+  return f.content;
+}
+async function writeGist(id,content){
+  if(id){ await gh('/gists/'+encodeURIComponent(id),{method:'PATCH',body:{files:{[SYNC_FILE]:{content}}}}); return id; }
+  const g=await (await gh('/gists',{method:'POST',body:{description:SYNC_DESC,public:false,files:{[SYNC_FILE]:{content}}}})).json();
+  return g.id;
+}
+
+/* ---- Configuración de este dispositivo (solo en su localStorage, nunca en el Gist) ---- */
+function loadSyncCfg(){
+  try{
+    const c=JSON.parse(localStorage.getItem(SYNC_KEY));
+    if(c&&typeof c==='object'&&c.token&&c.pass) return {token:String(c.token),pass:String(c.pass),gistId:String(c.gistId||''),lastSync:validIso(c.lastSync)?c.lastSync:'',synced:!!c.synced};
+  }catch(e){}
+  return null;
+}
+let syncCfg=loadSyncCfg();
+function saveSyncCfg(){ try{ if(syncCfg) localStorage.setItem(SYNC_KEY,JSON.stringify(syncCfg)); else localStorage.removeItem(SYNC_KEY); }catch(e){} }
+const syncRt={busy:false,pending:false,timer:null,status:syncCfg?'ok':'off',err:null,halt:'',toastKind:'',formErr:''};
+
+async function syncCycle(){
+  if(!syncCfg.gistId){ syncCfg.gistId=await findGist(); saveSyncCfg(); }
+  let remote=null, salt='';
+  if(syncCfg.gistId){
+    let text;
+    try{ text=await readGist(syncCfg.gistId); }
+    catch(e){ if(e.kind==='notfound'){ syncCfg.gistId=''; saveSyncCfg(); text=null; } else throw e; }
+    if(text){ const r=await decryptEnv(text); remote=r.st; salt=r.salt; }
+  }
+  /* Desde aquí hasta aplicar la fusión no hay esperas: se usa el estado de este mismo instante */
+  flushSave();
+  const local=appState, localFp=fingerprint(local), remoteFp=remote?fingerprint(remote):'';
+  const merged=!remote?local:(!syncCfg.synced&&isPristine(local))?adoptRemote(remote,local):mergeStates(local,remote);
+  const mergedFp=fingerprint(merged), changesLocal=merged!==local&&mergedFp!==localFp;
+  if(changesLocal&&uiBusy()) throw syncErr('busy','');
+  const had=new Set(local.sessions.map(s=>s.id)), added=changesLocal?merged.sessions.filter(s=>!had.has(s.id)).length:0;
+  if(changesLocal) applyMerged(merged);
+  if(!remote||mergedFp!==remoteFp){
+    const content=await encryptState(merged,salt);
+    syncCfg.gistId=await writeGist(syncCfg.gistId,content);
+  }
+  syncCfg.synced=true;
+  return {added};
+}
+async function syncNow(opts={}){
+  if(!syncCfg||!storeReady) return {ok:false};
+  if(syncRt.busy){ syncRt.pending=true; return {ok:false,busy:true}; }
+  if(syncRt.halt&&!opts.force) return {ok:false};
+  clearTimeout(syncRt.timer); syncRt.timer=null;
+  syncRt.busy=true; syncRt.halt=''; setSyncStatus('syncing');
+  let res={ok:true};
+  try{
+    let out;
+    const run=async()=>{ out=await syncCycle(); };
+    if(navigator.locks&&navigator.locks.request) await navigator.locks.request('migym_sync',run); else await run();
+    syncCfg.lastSync=new Date().toISOString(); saveSyncCfg(); syncRt.err=null; syncRt.toastKind='';
+    setSyncStatus('ok');
+    syncRt.lastAdded=out?out.added:0;
+    if(out&&out.added&&!opts.quiet) showToast(`🔁 Recibida${out.added>1?'s':''} ${pl(out.added,'sesión','sesiones')} del otro dispositivo`,{timeout:5000});
+  }catch(e){
+    if(e&&e.kind==='busy'){ syncRt.busy=false; setSyncStatus(syncRt.err?'error':'ok'); scheduleSync(8000); return {ok:false,busy:true}; }
+    res={ok:false,err:e}; handleSyncError(e,opts.quiet);
+  }
+  finally{ syncRt.busy=false; if(syncRt.pending){ syncRt.pending=false; if(!syncRt.halt) scheduleSync(2000); } }
+  return res;
+}
+function scheduleSync(delay=5000){
+  if(!syncCfg||syncRt.halt) return;
+  clearTimeout(syncRt.timer); syncRt.timer=setTimeout(()=>{ syncRt.timer=null; syncNow(); },delay);
+}
+function handleSyncError(e,quiet){
+  const known=e&&e.kind, kind=known||'unknown', msg=known?e.message:'Ha ocurrido un error inesperado al sincronizar.';
+  if(!known) console.error(e);
+  syncRt.err={kind,msg};
+  if(SYNC_HALT.includes(kind)) syncRt.halt=kind;
+  else scheduleSync(kind==='limit'?10*60000:60000);
+  setSyncStatus('error');
+  if(!quiet&&kind!=='network'&&kind!=='limit'&&syncRt.toastKind!==kind){
+    syncRt.toastKind=kind;
+    showToast(msg+(syncRt.halt?' La sincronización está en pausa.':''),{icon:'alert',action:'Abrir ajustes',fn:()=>nav('settings'),timeout:20000});
+  }
+}
+function syncStatusText(){
+  if(!syncCfg) return 'Desactivada en este dispositivo.';
+  if(syncRt.status==='syncing') return 'Sincronizando…';
+  if(syncRt.status==='error'&&syncRt.err) return syncRt.err.msg+(!syncRt.halt?' Se reintentará sola.':['token','password'].includes(syncRt.halt)?' Sincronización en pausa: corrígelo en «Cambiar token o contraseña».':' Sincronización en pausa: corrígelo y pulsa «Sincronizar ahora».');
+  const l=syncCfg.lastSync;
+  return 'Activa.'+(l?` Última vez: ${relDay(ymd(new Date(l)))}, a las ${fmtTime(l)}.`:'');
+}
+/* Solo se repinta el estado (no toda la pantalla: borraría lo que se esté escribiendo en los campos) */
+function setSyncStatus(s){
+  syncRt.status=s;
+  document.body.classList.toggle('sync-error',s==='error'&&!!syncRt.halt);
+  const st=$('syncStatus'); if(!st) return;
+  st.textContent=syncStatusText(); st.classList.toggle('bad',s==='error');
+  st.classList.toggle('busy',s==='syncing'||!syncCfg);
+  document.querySelectorAll('[data-sync-btn]').forEach(b=>{ b.disabled=syncRt.busy; });
+}
+function askSheet(title,text,okText,{danger=false}={}){
+  return new Promise(res=>{
+    const c=el('div'); text.split('\n\n').forEach(p=>c.append(el('p','muted',p)));
+    c.querySelectorAll('p+p').forEach(p=>{ p.style.marginTop='10px'; });
+    openSheet(title,c,{actions:[btn('Cancelar','secondary',null,()=>closeSheet()),btn(okText,danger?'danger':'',null,()=>{ res(true); closeSheet(); })],onClose:()=>res(false)});
+  });
+}
+async function activateSync(f){
+  const prev=syncCfg, token=f.token.value.trim()||(prev?prev.token:''), p1=f.p1.value, p2=f.p2.value;
+  const fail=(msg,focus)=>{ syncRt.formErr=msg; renderSyncForm(); if(focus) focus.focus(); };
+  if(!token) return fail('Pega el token de GitHub (empieza por github_pat_).',f.token);
+  if(/\s/.test(token)) return fail('El token no puede tener espacios: cópialo de nuevo.',f.token);
+  if(!prev||p1||p2){
+    if(p1.length<8) return fail('La contraseña de cifrado debe tener al menos 8 caracteres.',f.p1);
+    if(p1!==p2) return fail('Las dos contraseñas no coinciden.',f.p2);
+  }
+  syncRt.formErr=''; renderSyncForm();
+  document.activeElement&&document.activeElement.blur&&document.activeElement.blur();
+  const pass=(p1||(prev?prev.pass:'')).normalize('NFC');
+  const sameAccount=prev&&prev.token===token;
+  syncCfg={token,pass,gistId:sameAccount?prev.gistId:'',lastSync:'',synced:sameAccount?prev.synced:false};
+  keyCache.id=''; syncRt.halt='';
+  let r=await syncNow({force:true,quiet:true});
+  if(r.busy){ await new Promise(ok=>setTimeout(ok,300)); r=await syncNow({force:true,quiet:true}); }
+  if(!r.ok&&r.err&&r.err.kind==='password'&&syncCfg.gistId&&
+     await askSheet('La contraseña no coincide','La contraseña no coincide con la de los datos que ya hay en GitHub. Lo normal es que te hayas equivocado al escribirla: cancela y prueba otra vez.\n\nSi es la primera vez o no recuerdas la contraseña anterior, puedes SOBRESCRIBIR la copia de GitHub con los datos de ESTE dispositivo. Se perdería lo que solo estuviera en esa copia.','Sobrescribir',{danger:true})){
+    try{ await writeGist(syncCfg.gistId,await encryptState(appState,'')); syncCfg.synced=true; syncCfg.lastSync=new Date().toISOString(); saveSyncCfg(); syncRt.err=null; syncRt.halt=''; setSyncStatus('ok'); r={ok:true}; }
+    catch(e){ r={ok:false,err:e}; }
+  }
+  if(r.ok){
+    syncRt.formErr=''; syncRt.editing=false;
+    const n=syncRt.lastAdded||0;
+    showToast((prev?'✅ Datos de sincronización guardados':'✅ Sincronización activada')+(n?` · ${pl(n,'sesión recibida','sesiones recibidas')}`:''),{timeout:5000});
+  } else {
+    syncCfg=prev; saveSyncCfg(); syncRt.err=null; syncRt.halt=''; setSyncStatus(prev?'ok':'off');
+    const e=r.err;
+    syncRt.formErr=(e&&e.kind?e.message:'No se ha podido activar la sincronización.')+(e&&e.kind==='token'?' Revisa que has copiado el token entero.':e&&e.kind==='network'?' Comprueba la conexión.':'');
+  }
+  if(ui.view==='settings') renderApp(); else renderSyncForm();
+}
+async function disableSync(){
+  if(!await askSheet('Desactivar la sincronización','Se borrarán el token y la contraseña de este dispositivo y dejará de sincronizar.\n\nTus datos en este dispositivo y la copia cifrada en GitHub no se tocan.','Desactivar')) return;
+  clearTimeout(syncRt.timer); syncCfg=null; saveSyncCfg(); Object.assign(syncRt,{err:null,halt:'',formErr:'',editing:false}); keyCache.id=''; setSyncStatus('off');
+  showToast('Sincronización desactivada en este dispositivo',{icon:'check-circle',timeout:4000}); renderApp();
+}
+/* Sección de Ajustes */
+let syncFormBox=null;
+function renderSyncSection(sec){
+  const s=el('p','sync-status'); s.id='syncStatus'; sec.append(s);
+  if(syncCfg){
+    const r=el('div','row'); r.style.margin='10px 0 2px';
+    const now=btn('Sincronizar ahora','secondary',null,()=>syncNow({force:true}),'refresh'); now.dataset.syncBtn='1';
+    const chg=btn(syncRt.editing?'Ocultar':'Cambiar token o contraseña','ghost',null,()=>{ syncRt.editing=!syncRt.editing; syncRt.formErr=''; renderApp(); },'pencil');
+    r.append(now,chg,btn('Desactivar','ghost',null,disableSync,'x')); sec.append(r);
+  }
+  syncFormBox=el('div'); sec.append(syncFormBox);
+  if(!syncCfg||syncRt.editing) buildSyncForm(syncFormBox);
+  const d=el('details','sync-help'); d.append(el('summary','','Cómo crear el token de GitHub'));
+  const ol=el('ol');
+  [['En el ordenador, entra en ','github.com',' e inicia sesión.'],
+   ['Pulsa tu ','foto de perfil',' (arriba a la derecha) → ','Settings','.'],
+   ['En el menú de la izquierda, baja hasta el final → ','Developer settings','.'],
+   ['Despliega ','Personal access tokens',' → ','Fine-grained tokens','.'],
+   ['Botón verde ','Generate new token','.'],
+   ['Token name',': «Mi Gym». ','Expiration',': ','Custom',', una fecha dentro de un año (apúntala). ','Repository access',': «Public repositories (read-only)».'],
+   ['En ','Permissions',' → ','Add permissions',' (o ','Account permissions',') → ','Gists',' → ','Read and write','. Ningún otro.'],
+   ['Generate token',', confirma y copia el token (empieza por github_pat_; solo se muestra una vez).'],
+   ['Pégalo aquí, escribe dos veces una contraseña de cifrado (mínimo 8 caracteres) y pulsa ','Activar sincronización','.'],
+   ['En el otro dispositivo, solo el paso 9, con ','el mismo token y la misma contraseña',' (pásalos con un gestor de contraseñas, no por correo ni chat).']]
+    .forEach(parts=>{ const li=el('li'); parts.forEach((p,i)=>li.append(i%2?el('b','',p):document.createTextNode(p))); ol.append(li); });
+  d.append(ol,el('p','small muted','Sirve el mismo token del Revisor de Tareas: cada app guarda su propio archivo en el Gist. La contraseña cifra los datos antes de enviarlos; sin ella nadie puede leerlos, ni siquiera GitHub. Si la olvidas, desactiva y vuelve a activar con otra: podrás sobrescribir la copia de GitHub con los datos de este dispositivo.'));
+  sec.append(d);
+  setSyncStatus(syncRt.status);
+}
+function buildSyncForm(box){
+  box.replaceChildren();
+  const f={}, on=!!syncCfg;
+  const inp=(k,label,ph,auto)=>{ const i=el('input','sync-in'); i.type='password'; i.autocomplete=auto; i.spellcheck=false; i.autocapitalize='off'; i.placeholder=ph; f[k]=i;
+    const l=el('label','field'); l.append(el('span','',label),i); return l; };
+  const g=el('div','sync-form');
+  g.append(inp('token','Token de GitHub',on?'(guardado; escribe uno nuevo para cambiarlo)':'github_pat_…','off'),
+    inp('p1','Contraseña de cifrado',on?'(guardada; escribe otra para cambiarla)':'Mínimo 8 caracteres','new-password'),
+    inp('p2','Repite la contraseña','','new-password'));
+  const err=el('p','sync-err'); err.id='syncFormErr'; err.setAttribute('role','alert'); g.append(err);
+  const b=btn(on?'Guardar cambios':'Activar sincronización','',null,()=>activateSync(f),'check'); b.dataset.syncBtn='1';
+  const r=el('div','row'); r.append(b); g.append(r);
+  [f.token,f.p1,f.p2].forEach(i=>i.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); activateSync(f); } }));
+  box.append(g); renderSyncForm();
+}
+function renderSyncForm(){ const e=$('syncFormErr'); if(e){ e.textContent=syncRt.formErr||''; e.hidden=!syncRt.formErr; } setSyncStatus(syncRt.status); }
+
+/* Cuándo sincroniza: al abrir, 5 s después de cada cambio, al volver a la app, al recuperar la conexión y cada 3 minutos */
+document.addEventListener('visibilitychange',()=>{
+  if(!syncCfg) return;
+  if(document.visibilityState==='visible'){ if(Date.now()-tsOf(syncCfg.lastSync)>60000) syncNow(); }
+  else if(syncRt.timer) syncNow(); /* cambios sin enviar: se envían antes de que el móvil congele la app */
+});
+window.addEventListener('online',()=>{ if(syncCfg) syncNow(); });
+setInterval(()=>{ if(syncCfg&&document.visibilityState==='visible'&&!syncRt.busy) syncNow(); },180000);
+
 /* ================= Teclado (PC) ================= */
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&sheetOpen){ e.preventDefault(); closeSheet(); return; }
@@ -3426,7 +3757,7 @@ $('scrim').addEventListener('click',()=>closeSheet());
 try{ mqDesk.addEventListener('change',()=>renderApp({top:true})); }catch(e){}
 
 /* ================= Arranque ================= */
-window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,applyHevyImport,hashId,suggestFor,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState};
+window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,applyHevyImport,hashId,suggestFor,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState,fingerprint,encryptState,decryptEnv,syncNow,save,commit,get syncCfg(){ return syncCfg; },syncRt};
 (async function boot(){
   applyTheme();
   await bootStore();
@@ -3438,6 +3769,7 @@ window.__migym={get state(){ return appState; },set state(v){ appState=v; },norm
   if('serviceWorker' in navigator&&location.protocol==='https:'){
     navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).then(r=>{ swReg=r; }).catch(()=>{});
   }
+  if(syncCfg) setTimeout(()=>syncNow(),2500);
 })();
 </script>
 </body>

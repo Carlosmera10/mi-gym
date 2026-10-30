@@ -11,6 +11,7 @@ Dirección: <https://carlosmera10.github.io/mi-gym/>
 - **Técnica** de cada ejercicio (cómo hacerlo, cómo evitar lesiones y alternativas) y una guía general.
 - **Historial** por sesión y por ejercicio.
 - **Importación del historial de Hevy** (CSV) y copias de seguridad en JSON.
+- **Sincronización entre el móvil y el ordenador** mediante un Gist secreto de GitHub, con los datos cifrados en el navegador.
 
 ## Archivos
 
@@ -24,3 +25,10 @@ Dirección: <https://carlosmera10.github.io/mi-gym/>
 ## Datos
 
 Los datos se guardan solo en el navegador de cada dispositivo (IndexedDB, base `migym_db`). Este repositorio es público y **solo contiene código, nunca datos**. Todo lo que guarda la app empieza por `migym` para no mezclarse con las demás apps del mismo dominio.
+
+## Sincronización
+
+- Se activa en **Ajustes → Sincronización con el otro dispositivo** con un *fine-grained token* de GitHub que solo tenga el permiso **Account permissions → Gists: Read and write** (sirve el mismo del Revisor de Tareas) y una contraseña de cifrado.
+- Los datos se cifran antes de salir del navegador (PBKDF2-SHA256 de 600.000 vueltas y AES-GCM de 256 bits, comprimidos con gzip) y se guardan en el archivo `migym-sync.json` de un Gist secreto. Ni GitHub ni nadie sin la contraseña puede leerlos.
+- El token y la contraseña solo están en el `localStorage` de cada dispositivo (`migym_sync`), nunca en el Gist ni en este repositorio.
+- Fusión elemento a elemento (ejercicios, carpetas, rutinas y sesiones): gana el cambio más reciente y los borrados se respetan salvo que el elemento se modificara después. Los ajustes y la interfaz no se sincronizan.
