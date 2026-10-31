@@ -356,6 +356,14 @@ button.nl:hover{background:var(--hover)}
 .sugg-t{display:flex;gap:8px;align-items:flex-start;font-size:.9rem}
 .sugg-t .ic{margin-top:2px;width:16px;height:16px}
 .sugg-c{display:flex;gap:6px;margin-top:8px}
+.sugg-warn{margin-top:6px;color:var(--warn-ink)}
+.ups-line{display:flex;align-items:center;gap:8px;width:100%;margin-top:10px;padding:8px 10px;min-height:44px;border-radius:10px;border:1px solid var(--info-line);background:var(--info-bg);color:var(--info-ink);font:inherit;font-size:.88rem;text-align:left;cursor:pointer}
+.ups-line .ic{flex:none;width:16px;height:16px}
+.ups-line span{flex:1;min-width:0}
+.ups-it{display:flex;gap:10px;align-items:flex-start;padding:10px 4px;border-bottom:1px solid var(--line)}
+.ups-it .ic{flex:none;margin-top:2px;width:18px;height:18px}
+.ups-it>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ups-it b{font-weight:600}
 .sc{flex:1;background:var(--panel);color:var(--ink-2);border:1px solid var(--line-strong);font-size:.8rem;padding:5px 4px;min-height:34px;gap:4px}
 .sc:hover{background:var(--hover)}
 .sc.on{background:var(--ink);color:var(--panel);border-color:var(--ink)}
@@ -810,6 +818,7 @@ function normalizeSettings(s){
   s=s&&typeof s==='object'?s:{};
   return {restDefault:intOr(s.restDefault,90,0,900),autoRest:s.autoRest!==false,sound:s.sound!==false,bgRest:s.bgRest!==false,vibrate:s.vibrate!==false,
     kgStep:clamp(parseNum(s.kgStep)??2.5,0.25,20),lbStep:clamp(parseNum(s.lbStep)??5,0.5,40),
+    maxUps:intOr(s.maxUps,3,0,10),zoneGuard:s.zoneGuard!==false,
     lastBackup:validIso(s.lastBackup)?s.lastBackup:'',backupSnooze:validIso(s.backupSnooze)?s.backupSnooze:''};
 }
 function normalizeDeleted(d){
@@ -1361,13 +1370,95 @@ function applyPlan(sg,plan,item,unit){
   if(plan==='down'){ const nk=shiftKg(sg.w,sg.ex,unit,-1); return {...sg,kind:'down',kg:nk,reps:sg.lastReps,text:`Tu decisión: bajar a ${fmtW(nk,unit)} ${unit}`,mine:true}; }
   return {...sg,kind:'same',kg:sg.w,reps:sg.lastReps,text:`Tu decisión: repetir ${fmtW(sg.w,unit)} ${unit}`,mine:true};
 }
+/* Referencia de un ejercicio dentro de una sesión: en una rutina, solo cuenta lo que hiciste en ESA rutina
+   (el mismo ejercicio puede ir con otro peso y otras repeticiones en otra rutina). Si nunca lo has hecho en esta
+   rutina, se muestra la última vez en otra (marcada) pero sin propuesta. Sin rutina: la última vez en cualquiera. */
+function refFor(s,en){
+  const ex=getEx(en.exerciseId), rt=getRt(s.routineId), item=rt?rt.items.find(i=>i.id===en.itemId)||null:null;
+  let hist=exHistory(en.exerciseId).filter(h=>h.s.id!==s.id&&h.s.startedAt<s.startedAt), other=null;
+  if(s.routineId){
+    let same=hist.filter(h=>h.s.routineId===s.routineId);
+    /* Si el ejercicio está dos veces en la rutina, cada hueco con su propia historia */
+    if(en.itemId&&rt&&rt.items.filter(i=>i.exerciseId===en.exerciseId||i.alts.includes(en.exerciseId)).length>1){ const bi=same.filter(h=>h.en.itemId===en.itemId); if(bi.length) same=bi; }
+    if(same.length) hist=same; else { other=hist[0]||null; hist=[]; }
+  }
+  const last=hist[0]||other, prev2=hist[1]||null;
+  const base=item&&!other?suggestFor(ex,item,last,en.unit,prev2):null;
+  return {ex,rt,item,hist,last,prev2,other,base};
+}
+/* ---- Control de subidas de peso en la misma sesión ----
+   Subir carga en muchos ejercicios a la vez suma estrés en las mismas articulaciones. Reglas (Ajustes → Progresión):
+   1) máximo de subidas automáticas por sesión (settings.maxUps; 0 = sin límite);
+   2) zonas delicadas (settings.zoneGuard): una sola subida entre los ejercicios marcados «Cuida lumbar/hombro/rodilla»,
+      y ninguna en esa zona si marcaste una molestia allí en los 7 días anteriores.
+   Turno: primero los que llevan más sesiones esperando al tope, luego Esencial > Importante > Prescindible y el orden de la sesión.
+   Tu «Subir» manda siempre, pero avisa si pasa del límite. */
+const ZONE_TXT={lumbar:'la zona lumbar',hombro:'el hombro',rodilla:'la rodilla'};
+let upCache={key:'',v:null};
+function topStreak(hist,item){
+  if(!item||item.repMax==null) return 0;
+  let n=0, w0=null;
+  for(const h of hist){
+    const work=h.en.sets.filter(x=>x.done&&x.kind!=='warmup'&&x.reps!=null);
+    if(!work.length) break;
+    const w=Math.max(...work.map(x=>x.kg??0)), atW=work.filter(x=>Math.abs((x.kg??0)-w)<0.01);
+    if(w0==null) w0=w; else if(Math.abs(w-w0)>0.01) break;
+    if(!atW.every(x=>x.reps>=item.repMax)) break;
+    n++;
+  }
+  return n;
+}
+function recentPain(s){
+  const t=tsOf(s.startedAt), from=t-7*864e5, out=new Map();
+  appState.sessions.forEach(x=>{ if(!x.endedAt||x.id===s.id) return; const tx=tsOf(x.startedAt); if(tx>=t||tx<from) return;
+    x.entries.forEach(en=>{ if(en.pain&&CARE[en.pain]&&(!out.has(en.pain)||out.get(en.pain)<x.date)) out.set(en.pain,x.date); }); });
+  return out;
+}
+const nameList=a=>a.length<=2?a.join(' y '):`${a.slice(0,2).join(', ')} y ${a.length-2} más`;
+function upPlan(s){
+  const st=appState.settings, key=dataRev+'|'+s.id+'|'+st.maxUps+'|'+st.zoneGuard;
+  if(upCache.key===key) return upCache.v;
+  const v={adj:new Map(),warn:new Map(),ups:[],held:[],limit:st.maxUps};
+  if(!s.endedAt&&s.routineId){
+    const limit=st.maxUps>0?st.maxUps:Infinity, pain=st.zoneGuard?recentPain(s):new Map(), zoneUsed=new Map(), allowed=[];
+    const refs=s.entries.map((en,i)=>({en,i,r:refFor(s,en)}));
+    const zonesOf=ex=>st.zoneGuard?ex.careFlags.filter(z=>ZONE_TXT[z]):[];
+    const cands=refs.filter(c=>c.r.base&&c.r.base.kind==='up'&&!c.en.plan)
+      .map(c=>({...c,wait:topStreak(c.r.hist,c.r.item),pr:{E:0,I:1,P:2}[c.r.item.prio]??1}))
+      .sort((a,b)=>b.wait-a.wait||a.pr-b.pr||a.i-b.i);
+    cands.forEach(c=>{
+      const ex=c.r.ex, b=c.r.base, u=c.en.unit, W=`${fmtW(b.w,u)} ${u}`, zs=zonesOf(ex);
+      const pz=zs.find(z=>pain.has(z)), zz=zs.find(z=>zoneUsed.has(z));
+      let why=null;
+      if(pz) why=`Molestia en ${ZONE_TXT[pz]} el ${fmtDate(pain.get(pz))}: hoy no se sube en ejercicios que la cargan`;
+      else if(zz) why=`Hoy ya subes en ${zoneUsed.get(zz)}, que también carga ${ZONE_TXT[zz]} (una subida por zona delicada)`;
+      else if(allowed.length>=limit) why=`Hoy ya subes en ${nameList(allowed)} (máximo ${limit} por sesión)`;
+      if(why){
+        v.adj.set(c.en.id,{...b,kind:'same',kg:b.w,reps:b.lastReps,held:true,text:`Listo para subir, pero repite ${W}. ${why}`});
+        v.held.push({name:ex.name,why});
+      } else { allowed.push(ex.name); zs.forEach(z=>zoneUsed.set(z,ex.name)); v.ups.push(ex.name); }
+    });
+    /* Tus «Subir» manuales: mandan, pero se avisa si pasan del límite o repiten zona */
+    refs.forEach(c=>{
+      if(c.en.plan!=='up'||!c.r.base||c.r.base.w==null) return;
+      const ex=c.r.ex, zs=zonesOf(ex), pz=zs.find(z=>pain.has(z)), zz=zs.find(z=>zoneUsed.has(z)&&zoneUsed.get(z)!==ex.name);
+      let w=null;
+      if(pz) w=`Ojo: molestia en ${ZONE_TXT[pz]} el ${fmtDate(pain.get(pz))}`;
+      else if(zz) w=`Ojo: hoy ya subes en ${zoneUsed.get(zz)}, que también carga ${ZONE_TXT[zz]}`;
+      else if(v.ups.length>=limit) w=`Ojo: ya son ${v.ups.length+1} subidas hoy (máximo ${limit})`;
+      if(w) v.warn.set(c.en.id,w);
+      v.ups.push(ex.name); zs.forEach(z=>{ if(!zoneUsed.has(z)) zoneUsed.set(z,ex.name); });
+      const h=v.held.findIndex(x=>x.name===ex.name); if(h>=0) v.held.splice(h,1);
+    });
+  }
+  upCache={key,v}; return v;
+}
 /* Valores de referencia de cada serie: la última vez y la propuesta */
 function planFor(s,en){
-  const ex=getEx(en.exerciseId), rt=getRt(s.routineId), item=rt?rt.items.find(i=>i.id===en.itemId):null;
-  const hist=exHistory(en.exerciseId).filter(h=>h.s.id!==s.id&&h.s.startedAt<s.startedAt);
-  const last=hist[0]||null, prev2=hist[1]||null;
-  const base=item?suggestFor(ex,item,last,en.unit,prev2):null;
-  const sugg=applyPlan(base,en.plan,item,en.unit);
+  const R=refFor(s,en), ex=R.ex, item=R.item, last=R.last, U=upPlan(s);
+  const base=U.adj.get(en.id)||R.base;
+  let sugg=applyPlan(base,en.plan,item,en.unit);
+  if(sugg&&U.warn.has(en.id)) sugg={...sugg,warn:U.warn.get(en.id)};
   const lw=last?last.en.sets.filter(x=>x.done&&x.kind==='warmup'):[], ln=last?last.en.sets.filter(x=>x.done&&x.kind!=='warmup'):[];
   let iw=0,inn=0;
   const rows=en.sets.map(x=>{
@@ -1380,7 +1471,7 @@ function planFor(s,en){
     }
     return {prev,ph};
   });
-  return {ex,item,last,base,sugg,rows};
+  return {ex,item,last,base,sugg,rows,other:R.other};
 }
 
 /* ================= Entrenar ================= */
@@ -1592,15 +1683,15 @@ function startSession(r,mode){
     r.items.filter(i=>md.p.includes(i.prio)).forEach(it=>{
       const prevEn=prevRt&&prevRt.entries.find(en=>en.itemId===it.id);
       const exId=prevEn&&getEx(prevEn.exerciseId)?prevEn.exerciseId:it.exerciseId;
-      s.entries.push(newEntry(exId,it));
+      s.entries.push(newEntry(exId,it,r.id));
     });
     ui.lastMode[r.id]=mode;
   }
   commit(null,()=>{ appState.sessions.unshift(s); });
   nav('session',{sessionId:s.id});
 }
-function newEntry(exId,item){
-  const ex=getEx(exId), last=exHistory(exId)[0];
+function newEntry(exId,item,rtId){
+  const ex=getEx(exId), hs=exHistory(exId), last=(rtId&&hs.find(h=>h.s.routineId===rtId))||hs[0];
   const lastW=last?last.en.sets.filter(x=>x.done&&x.kind==='warmup').length:0;
   const lastN=last?last.en.sets.filter(x=>x.done&&x.kind!=='warmup').length:0;
   const nw=item?(last?Math.min(lastW,3):item.warmup):Math.min(lastW,3), nn=item?item.sets:(lastN||3);
@@ -1627,6 +1718,15 @@ function renderSession(main){
   head.append(live?btn('Terminar','',null,()=>askFinish(s),'check'):btn('Hecho','',null,()=>doneEditing(s),'check'));
   main.append(head);
   if(live&&rt&&rt.note){ const p=el('p','small muted',rt.note); p.style.marginTop='10px'; main.append(p); }
+  if(live&&rt){
+    const U=upPlan(s);
+    if(U.ups.length||U.held.length){
+      const b=el('button','ups-line'); b.type='button';
+      b.append(ic(U.held.length?'shield':'trend'),el('span','',`${U.ups.length?`Hoy subes peso en ${pl(U.ups.length,'ejercicio','ejercicios')}`:'Hoy no subes peso'}${U.limit>0?` (máx. ${U.limit})`:''}${U.held.length?` · ${U.held.length} ${U.held.length===1?'espera':'esperan'} a la próxima`:''}`),ic('chev-right'));
+      b.addEventListener('click',()=>upsSheet(U));
+      main.append(b);
+    }
+  }
   const wrap=el('div'); wrap.id='entries';
   s.entries.forEach((en,i)=>wrap.append(entryCard(s,en,i)));
   if(!s.entries.length) { const e=el('div','empty','Sin ejercicios'); e.style.marginTop='14px'; wrap.append(e); }
@@ -1661,7 +1761,8 @@ function entryCard(s,en,idx){
     line('flag',[target,`descanso ${fmtSecs(item.restSec||ex.restSec)}`].join(' · '));
     const d=el('span','dot '+item.prio); d.title=PRIO[item.prio]; d.style.margin='5px 3px 0'; const l=info.lastChild; l.replaceChild(d,l.firstChild);
   }
-  if(P.last) line('history',`${fmtDate(P.last.s.date)}: ${setsSummary(P.last.en,ex,unit)}`);
+  if(P.other) line('history',`Primera vez en esta rutina · en «${P.other.s.name}» ${fmtDate(P.other.s.date)}: ${setsSummary(P.other.en,ex,unit)}`);
+  else if(P.last) line('history',`${fmtDate(P.last.s.date)}: ${setsSummary(P.last.en,ex,unit)}`);
   else line('history','Primera vez');
   card.append(info);
   const nb=notesBlock(ex,item,getRt(s.routineId),P.last,true); if(nb) card.append(nb);
@@ -1804,15 +1905,24 @@ function painSheet(s,en){
 function suggBox(s,en,P){
   const sg=P.sugg, k=sg.kind, def=P.base?KIND_DIR[P.base.kind]:'same', dir=en.plan||def;
   const box=el('div','sugg-box k-'+k);
-  const t=el('div','sugg-t'); t.append(ic(k==='up'?'trend':k==='up-reps'?'zap':k==='pain'?'alert':k==='down'?'arrow-down':'equal'),el('span','',sg.text||'')); box.append(t);
+  const t=el('div','sugg-t'); t.append(ic(sg.held?'shield':k==='up'?'trend':k==='up-reps'?'zap':k==='pain'?'alert':k==='down'?'arrow-down':'equal'),el('span','',sg.text||'')); box.append(t);
+  if(sg.warn){ const w=el('div','sugg-t sugg-warn'); w.append(ic('alert'),el('span','',sg.warn)); box.append(w); }
   if(sg.w!=null){
     const c=el('div','sugg-c');
     [['up','Subir','arrow-up'],['same','Mismo peso','equal'],['down','Bajar','arrow-down']].forEach(([d,l,icn])=>{
-      const b=btn(l,'sc'+(dir===d?' on':''),null,()=>{ en.plan=d===def?'':d; dataRev++; save(); refreshCard(s,en); },icn); b.setAttribute('aria-pressed',String(dir===d)); c.append(b);
+      /* Repinta toda la sesión: decidir aquí puede liberar u ocupar el turno de subida de otro ejercicio */
+      const b=btn(l,'sc'+(dir===d?' on':''),null,()=>{ en.plan=d===def?'':d; dataRev++; save(); renderApp(); },icn); b.setAttribute('aria-pressed',String(dir===d)); c.append(b);
     });
     box.append(c);
   }
   return box;
+}
+/* ---- Detalle de las subidas de hoy ---- */
+function upsSheet(U){
+  const c=el('div'); const add=(icon,t,small)=>{ const d=el('div','ups-it'), x=el('div'); x.append(el('b','',t)); if(small) x.append(el('span','small muted',small)); d.append(ic(icon),x); c.append(d); };
+  if(U.ups.length) c.append(el('p','small muted','Subes peso en:')); U.ups.forEach(n=>add('trend',n));
+  if(U.held.length) c.append(el('p','small muted','Listos para subir, pero esperan a la próxima vez:')); U.held.forEach(h=>add('shield',h.name,h.why));
+  openSheet('Subidas de peso de hoy',c,{actions:[btn('Cambiar el límite','secondary',null,()=>{ closeSheet(); nav('settings'); },'sliders'),btn('Cerrar','',null,()=>closeSheet())]});
 }
 /* ---- Récord en directo al marcar una serie ---- */
 function livePR(ex,en,x){
@@ -1975,7 +2085,7 @@ function swapSheet(s,en){
 }
 function addEntry(s,id){
   const rt=getRt(s.routineId), it=rt&&rt.items.find(i=>(i.exerciseId===id||i.alts.includes(id))&&!s.entries.some(e=>e.itemId===i.id));
-  const en=newEntry(id,it||null);
+  const en=newEntry(id,it||null,s.routineId);
   commit(null,()=>{ s.entries.push(en); });
   const c=document.querySelector(`.ex-card[data-entry="${en.id}"]`); if(c) c.scrollIntoView({block:'start',behavior:'smooth'});
 }
@@ -2979,6 +3089,8 @@ function renderSettings(main){
   const pr=sec('trend','Progresión');
   line(pr,'Subida de peso en kg',numIn(fmtNum(st.kgStep,2),v=>setSetting('kgStep',parseNum(v)??2.5),'decimal'),'Si el ejercicio no tiene historial ni salto propio');
   line(pr,'Subida de peso en lb',numIn(fmtNum(st.lbStep,2),v=>setSetting('lbStep',parseNum(v)??5),'decimal'));
+  line(pr,'Máximo de ejercicios que suben peso en una sesión',numIn(st.maxUps,v=>{ setSetting('maxUps',parseInt(v,10)||0); renderApp(); }),'0 = sin límite');
+  line(pr,'Zonas delicadas: una subida por zona',sw(st.zoneGuard,v=>setSetting('zoneGuard',v),'Proteger zonas delicadas'),'Lumbar, hombro y rodilla; ninguna tras una molestia en los últimos 7 días');
 
   renderSyncSection(sec('refresh','Sincronización con el otro dispositivo'));
 
@@ -3018,6 +3130,8 @@ function renderHelp(main){
      ['kg o lb:','pulsa la unidad que hay encima de la columna del peso. El ejercicio recuerda la unidad para la próxima vez; todo se guarda en kg y se convierte al mostrarlo.'],
      ['Salto de peso:','cada ejercicio sube según su máquina, polea o mancuernas. Al subir peso, la sugerencia propone el siguiente peso que ya has usado en ese ejercicio; si nunca has pasado de ahí, suma el salto más habitual de tu historial. Sin historial: +4 kg en mancuernas (2 por cada una; el peso de las mancuernas se anota como la suma de las dos) y +2 kg en las de una mano («a un brazo») y el de Ajustes → Progresión en lo demás. Para fijarlo tú: ⋯ del ejercicio → «Salto de peso».'],
      ['Sugerencia (en verde):','si la última vez llegaste al tope del rango en todas las series, propone subir peso; si no, una repetición más. Si escribes otros valores, mandan los tuyos.'],
+     ['La última vez y la sugerencia son de la misma rutina:','un ejercicio que haces en dos rutinas (p. ej. el remo en máquina en Torso + Hombro y en Full Body + Brazos) lleva su propio peso y sus repeticiones en cada una. Si es la primera vez que lo haces en esa rutina, verás lo que hiciste en la otra (indicando cuál), pero sin sugerencia. En un entrenamiento libre se usa la última vez en cualquier rutina.'],
+     ['Subidas de peso en la misma sesión:','subir carga en muchos ejercicios a la vez suma estrés en las mismas articulaciones. Por eso, como mucho 3 ejercicios suben peso en cada sesión (se cambia en Ajustes → Progresión; 0 = sin límite) y, entre los marcados «Cuida lumbar», «Cuida hombro» o «Cuida rodilla», solo uno por zona. Tampoco se propone subir en una zona en la que marcaste una molestia en los 7 días anteriores. Tienen turno primero los que llevan más sesiones esperando al tope, luego los esenciales, los importantes y los prescindibles. Los que esperan muestran «Listo para subir, pero repite…» (icono del escudo) y la línea de arriba de la sesión dice cuántos suben y cuántos esperan; púlsala para ver el detalle. Si aun así quieres subir, pulsa «Subir» en ese ejercicio: manda tu decisión, pero avisa si pasas del límite.'],
      ['Serie de calentamiento, drop set o al fallo:','pulsa el número de la serie.'],
      ['Máquina ocupada:','botón ⇄ del ejercicio: alternativas de la rutina o cualquier otro ejercicio. La próxima vez que hagas esa rutina se repite el cambio.'],
      ['Técnica:','pulsa el nombre del ejercicio o el icono del libro.'],
@@ -3757,7 +3871,7 @@ $('scrim').addEventListener('click',()=>closeSheet());
 try{ mqDesk.addEventListener('change',()=>renderApp({top:true})); }catch(e){}
 
 /* ================= Arranque ================= */
-window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,applyHevyImport,hashId,suggestFor,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState,fingerprint,encryptState,decryptEnv,syncNow,save,commit,get syncCfg(){ return syncCfg; },syncRt};
+window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,applyHevyImport,hashId,suggestFor,refFor,upPlan,planFor,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState,fingerprint,encryptState,decryptEnv,syncNow,save,commit,get syncCfg(){ return syncCfg; },syncRt};
 (async function boot(){
   applyTheme();
   await bootStore();
