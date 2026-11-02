@@ -8,6 +8,7 @@ Dirección: <https://carlosmera10.github.io/mi-gym/>
 
 - **Rutinas** (Piernas, Torso + Hombro, Full Body + Brazos, Comba + core y Sin impacto + core) con series, rangos de repeticiones, prioridad para sesiones de 30 / 45 min o completas, descanso, aproximaciones y alternativas por si la máquina está ocupada.
 - **Sesión en el gimnasio**: «la última vez» en cada serie, la nota que dejaste para la próxima vez, sugerencia de progresión, peso en kg o lb, temporizador de descanso con vibración y sonido, y pantalla siempre encendida.
+- **Máquina ocupada**: botón en cada ejercicio para cambiar el orden según la guía, dejarlo para más tarde, usar una alternativa solo ese día o hacer una superserie compatible con el gimnasio.
 - **Vuelta tras un parón y semana de descarga**: propuesta de peso según el tiempo sin entrenar, recuperación gradual y descarga opcional cuando hay señales de fatiga; decides siempre tú.
 - **Técnica** de cada ejercicio (cómo hacerlo, cómo evitar lesiones y alternativas) y una guía general.
 - **Historial** por sesión y por ejercicio.

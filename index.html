@@ -136,10 +136,15 @@ main{padding:0 32px 120px;max-width:920px;width:100%;margin:0 auto}
 .ex-top{display:flex;align-items:flex-start;gap:6px}
 .ex-name{flex:1;min-width:0;background:transparent;color:var(--ink);justify-content:flex-start;text-align:left;padding:4px 0;font-size:1.04rem;font-weight:700;min-height:0;display:block}
 .ex-name:hover{background:transparent;color:var(--accent-ink)}
-.ex-badges{display:flex;gap:5px;flex-wrap:wrap;margin:2px 0 4px}
+.ex-badges{display:flex;gap:5px;flex-wrap:wrap;margin:2px 0 4px;min-width:0}
+.ex-badges .chip{white-space:normal;max-width:100%}
+.ex-badges .chip .ic{flex:none}
 .ex-info{display:flex;flex-direction:column;gap:3px;font-size:.86rem;color:var(--muted);margin:4px 0 8px}
 .ex-info .line{display:flex;gap:6px;align-items:flex-start}
 .ex-info .line .ic{margin-top:2px;width:15px;height:15px}
+.ex-info .line>span{min-width:0}
+.busy-btn{margin:-5px 0 -3px auto;flex:none;position:relative}
+.busy-btn::after{content:'';position:absolute;inset:-6px 0}
 .note-prev{background:var(--warn-bg);color:var(--warn-ink);border:1px solid var(--warn-line);border-radius:9px;padding:6px 10px;font-size:.88rem;display:flex;gap:8px;align-items:flex-start;margin:2px 0 6px}
 .note-prev .ic{margin-top:2px;width:15px;height:15px}
 .note-fixed{background:var(--info-bg);color:var(--info-ink);border:1px solid var(--info-line)}
@@ -805,6 +810,7 @@ function normalizeEntry(e){
   e=e&&typeof e==='object'?e:{};
   return {id:str(e.id,80)||newId(),exerciseId:str(e.exerciseId,80),itemId:str(e.itemId,80),unit:e.unit==='lb'?'lb':'kg',note:str(e.note,1000),
     feel:FEEL_TXT[e.feel]?e.feel:'',pain:PAIN[e.pain]?e.pain:'',plan:['up','same','down'].includes(e.plan)?e.plan:'',
+    ...(e.busyFrom?{busyFrom:str(e.busyFrom,80)}:{}),...(e.ss?{ss:str(e.ss,80)}:{}),
     sets:(Array.isArray(e.sets)?e.sets:[]).map(normalizeSet).slice(0,60)};
 }
 function normalizeSession(s){
@@ -1858,7 +1864,8 @@ function startSession(r,mode){
     const prevRt=finished().find(x=>x.routineId===r.id);
     r.items.filter(i=>md.p.includes(i.prio)).forEach(it=>{
       const prevEn=prevRt&&prevRt.entries.find(en=>en.itemId===it.id);
-      const exId=prevEn&&getEx(prevEn.exerciseId)?prevEn.exerciseId:it.exerciseId;
+      const prevId=prevEn&&(prevEn.busyFrom&&getEx(prevEn.busyFrom)?prevEn.busyFrom:prevEn.exerciseId); // un cambio por «Ocupada» era solo de ese día
+      const exId=prevId&&getEx(prevId)?prevId:it.exerciseId;
       s.entries.push(newEntry(exId,it,r.id,light));
     });
     ui.lastMode[r.id]=mode;
@@ -1938,6 +1945,8 @@ function entryCard(s,en,idx){
   card.append(top);
   const badges=el('div','ex-badges');
   ex.careFlags.forEach(c=>badges.append(chip(CARE[c],'care','shield')));
+  if(en.busyFrom&&getEx(en.busyFrom)) badges.append(chip(`Solo hoy · ${exName(en.busyFrom)}`,'','swap'));
+  const pair=partnerOf(s,en); if(pair) badges.append(chip(`Superserie · ${exName(pair.exerciseId)}`,'accent','repeat'));
   if(badges.childNodes.length) card.append(badges);
   const info=el('div','ex-info');
   const line=(icon,text)=>{ const l=el('div','line'); l.append(ic(icon),el('span','',text)); info.append(l); };
@@ -1949,6 +1958,7 @@ function entryCard(s,en,idx){
   if(P.other) line('history',`Primera vez en esta rutina · en «${P.other.s.name}» ${fmtDate(P.other.s.date)}: ${setsSummary(P.other.en,ex,unit)}`);
   else if(P.last) line('history',`${fmtDate(P.last.s.date)}: ${setsSummary(P.last.en,ex,unit)}`);
   else line('history','Primera vez');
+  if(live&&!isDesk()&&!entryDone(en)&&!NO_BUSY.has(ex.equipment)) (item?info.firstChild:info.lastChild).append(btn('Ocupada','secondary small busy-btn',null,()=>busySheet(s,en),'clock'));
   card.append(info);
   const nb=notesBlock(ex,item,getRt(s.routineId),P.last,true); if(nb) card.append(nb);
   if(live&&P.sugg&&(P.sugg.text||en.plan)) card.append(suggBox(s,en,P));
@@ -2017,6 +2027,7 @@ function setValid(ex,x){
 }
 function toggleDone(s,en,x,ph){
   const ex=getEx(en.exerciseId), wasDone=entryDone(en);
+  let pair=null, goPair=null;
   if(!x.done){
     if(ph){ if(x.kg==null&&ph.kg!=null&&ex.type==='peso_reps') x.kg=ph.kg; if(x.reps==null&&ph.reps!=null) x.reps=ph.reps; if(x.secs==null&&ph.secs!=null&&(ex.type==='tiempo'||ex.type==='distancia')) x.secs=ph.secs; if(x.km==null&&ph.km!=null&&ex.type==='distancia') x.km=ph.km; }
     if(!setValid(ex,x)){
@@ -2026,16 +2037,20 @@ function toggleDone(s,en,x,ph){
       return;
     }
     x.done=true; ui.lastTouched=en.id; saveUI();
+    /* En una superserie, sin descanso hasta completar la serie del otro ejercicio */
+    pair=partnerOf(s,en);
+    if(pair&&x.kind!=='warmup'&&!s.endedAt&&pendingEn(pair)&&workSets(pair).filter(y=>y.done).length<workSets(en).filter(y=>y.done).length) goPair=workSets(pair).find(y=>!y.done);
     if(!s.endedAt&&appState.settings.autoRest){
       const rt=getRt(s.routineId), it=rt&&rt.items.find(i=>i.id===en.itemId);
       const secs=x.kind==='warmup'?Math.min(60,(it&&it.restSec)||ex.restSec||appState.settings.restDefault):(it&&it.restSec)||ex.restSec||appState.settings.restDefault;
       const all=s.entries.every(e=>e.sets.every(y=>y.done));
-      if(secs>0&&!all) startRest(secs,ex.name);
+      if(secs>0&&!all&&!goPair) startRest(pair&&x.kind!=='warmup'?Math.max(secs,restOf(s,pair)):secs,ex.name);
     }
     if(!s.endedAt) livePR(ex,en,x);
   } else x.done=false;
   dataRev++; clearTimeout(saveTimer); saveTimer=null; save();
   if(ui.focus&&!s.endedAt&&wasDone!==entryDone(en)) renderApp(); else refreshCard(s,en);
+  if(goPair) requestAnimationFrame(()=>{ const r=document.querySelector(`[data-set="${goPair.id}"]`); if(r) r.scrollIntoView({behavior:reducedMotion()?'auto':'smooth',block:'center'}); });
 }
 const entryDone=en=>{ const w=en.sets.filter(x=>x.kind!=='warmup'); return w.length>0&&w.every(x=>x.done); };
 /* ---- Plegar tarjetas. En modo «compacto» solo se abre el ejercicio actual (y el que acabas de terminar hasta que marques cómo ha ido) ---- */
@@ -2044,7 +2059,8 @@ function isOpen(s,en){
   if(ui.openFor!==s.id){ ui.openFor=s.id; ui.openEntries={}; ui.lastTouched=''; }
   const o=ui.openEntries[en.id]; if(o===true||o===false) return o;
   if(!ui.focus||s.endedAt) return true;
-  return en.id===currentEntryId(s)||(en.id===ui.lastTouched&&!en.feel&&!en.pain&&!s.endedAt);
+  const pa=partnerOf(s,en);
+  return en.id===currentEntryId(s)||(!!pa&&pa.id===currentEntryId(s))||(en.id===ui.lastTouched&&!en.feel&&!en.pain&&!s.endedAt);
 }
 function setOpen(s,en,v){ ui.openEntries[en.id]=v; saveUI(); renderApp(); }
 function toggleFocus(){ ui.focus=!ui.focus; ui.openEntries={}; saveUI(); renderApp(); const s=liveSession(); if(ui.focus&&s) scrollToEntry(currentEntryId(s)); }
@@ -2195,6 +2211,7 @@ function entryMenu(s,en,idx){
   c.append(sheetItem('chev-right','Ver historial del ejercicio',()=>{ closeSheet(); flushSave(); nav('exercise',{exId:ex.id}); }));
   if(idx>0) c.append(sheetItem('arrow-up','Subir',()=>{ closeSheet(); commit(null,()=>{ s.entries.splice(idx,1); s.entries.splice(idx-1,0,en); }); }));
   if(idx<s.entries.length-1) c.append(sheetItem('arrow-down','Bajar',()=>{ closeSheet(); commit(null,()=>{ s.entries.splice(idx,1); s.entries.splice(idx+1,0,en); }); }));
+  if(en.ss) c.append(sheetItem('repeat','Quitar la superserie',()=>{ closeSheet(); commit(null,()=>breakPair(s,en)); }));
   c.append(sheetItem('trash','Quitar de la sesión',()=>{ closeSheet(); commit(`🗑️ ${ex.name} quitado de la sesión`,()=>{ s.entries=s.entries.filter(e=>e!==en); }); },{cls:'danger'}));
   openSheet(ex.name,c);
 }
@@ -2251,11 +2268,122 @@ function restSheet(ex){
   opts.forEach(v=>c.append(sheetItem('timer',fmtSecs(v),()=>{ closeSheet(); commit(`⏱️ Descanso de ${fmtSecs(v)} para ${ex.name}`,()=>{ if(ex.restSec===v) return false; ex.restSec=v; }); },{tick:ex.restSec===v})));
   openSheet('Descanso · '+ex.name,c);
 }
+/* ---- Máquina ocupada ----
+   Sigue las reglas de la pestaña «Guía»: lo aislado no adelanta a lo grande (grande = 2 min de descanso o más en la rutina),
+   el curl femoral va antes del peso muerto rumano, el cardio antes del core y, si la rutina alterna empuje y tirón, se sigue alternando.
+   Superserie solo con aislamiento y sin ocupar dos puestos (máquina, polea o banco) a la vez. */
+const FREE_GEAR=new Set(['mancuernas','peso_corporal','banda','kettlebell']), NO_BUSY=new Set(['peso_corporal','comba','otro']);
+const ANTAG={biceps:'triceps',triceps:'biceps',pecho:'espalda',espalda:'pecho',cuadriceps:'isquios',isquios:'cuadriceps'};
+const needsBench=ex=>ex.equipment==='banco'||/inclinad|banco|banca|apoyo en pecho|tumbad|b[uú]lgara/i.test(ex.name)||/\bbanco\b/i.test(ex.tech&&ex.tech.how?String(ex.tech.how):'');
+const isFree=ex=>FREE_GEAR.has(ex.equipment)&&!needsBench(ex);
+const slotOf=(s,en)=>{ const rt=getRt(s.routineId); return rt?rt.items.find(i=>i.id===en.itemId)||null:null; };
+const restOf=(s,en)=>{ const it=slotOf(s,en), ex=getEx(en.exerciseId); return (it&&it.restSec)||(ex&&ex.restSec)||0; };
+const isBigEn=(s,en)=>restOf(s,en)>=120;
+const workSets=en=>en.sets.filter(x=>x.kind!=='warmup');
+const pendingEn=en=>workSets(en).some(x=>!x.done);
+const patternOf=ex=>ex.muscle==='espalda'?'pull':ex.muscle==='pecho'||(ex.muscle==='hombros'&&ex.secondary.includes('triceps'))?'push':'';
+function alternates(s){
+  const rt=getRt(s.routineId); if(!rt) return false;
+  const p=rt.items.filter(i=>{ const e=getEx(i.exerciseId); return e&&(i.restSec||e.restSec)>=120; }).map(i=>patternOf(getEx(i.exerciseId)));
+  return p.length>=4&&p.every((x,i)=>x&&(i===0||x!==p[i-1]));
+}
+const partnerOf=(s,en)=>en.ss?s.entries.find(e=>e!==en&&e.ss===en.ss)||null:null;
+/* Por qué no conviene hacer ahora este ejercicio ('' si se puede). Solo se aplica en las rutinas */
+function orderBlock(s,c,busy){
+  if(!s.routineId) return '';
+  const ex=getEx(c.exerciseId), ic0=s.entries.indexOf(c), big=isBigEn(s,c);
+  for(const p of s.entries){
+    if(p===c||!pendingEn(p)) continue;
+    const px=getEx(p.exerciseId), ip=s.entries.indexOf(p);
+    if(px.muscle==='cardio'&&ex.muscle!=='cardio') return `Después de ${px.name}`;
+    if(!big&&isBigEn(s,p)&&ip<ic0) return `Después de ${px.name}`;
+    if(/curl femoral/i.test(px.name)&&/rumano/i.test(ex.name)) return `Después de ${px.name}`;
+  }
+  if(big&&alternates(s)){
+    const done=s.entries.filter(e=>e!==c&&isBigEn(s,e)&&!pendingEn(e)&&workSets(e).length).pop(), lastP=done?patternOf(getEx(done.exerciseId)):patternOf(getEx(busy.exerciseId));
+    if(patternOf(ex)===lastP) return 'Toca alternar empuje y tirón';
+  }
+  return '';
+}
+function busyOptions(s,en){
+  const ex=getEx(en.exerciseId), rows=s.entries.filter(e=>e!==en&&pendingEn(e)).map(e=>({e,x:getEx(e.exerciseId),why:orderBlock(s,e,en)}));
+  const can=rows.filter(r=>!r.why), rank=r=>(r.x.muscle===ex.muscle?1000:0)+s.entries.indexOf(r.e)*10+(isFree(r.x)?0:5);
+  const now=can.slice().sort((a,b)=>rank(a)-rank(b)).slice(0,3);
+  /* Superseries: dos ejercicios sin empezar, sin descansos largos, de distinto músculo y sin cargar la misma zona delicada */
+  const pool=can.filter(r=>!r.e.sets.some(x=>x.done)&&!r.e.ss&&restOf(s,r.e)<120&&['peso_reps','reps'].includes(r.x.type)&&r.x.muscle!=='cardio'), pairs=[];
+  for(let i=0;i<pool.length;i++) for(let j=i+1;j<pool.length;j++){
+    const a=pool[i], b=pool[j], stations=(isFree(a.x)?0:1)+(isFree(b.x)?0:1);
+    if(stations>1||a.x.muscle===b.x.muscle||a.x.careFlags.some(z=>b.x.careFlags.includes(z))) continue;
+    pairs.push({a,b,score:(ANTAG[a.x.muscle]===b.x.muscle?0:100)+(stations?0:50)+i+j});
+  }
+  pairs.sort((p,q)=>p.score-q.score);
+  return {now,pairs:pairs.slice(0,2),rest:rows.filter(r=>!now.includes(r))};
+}
+/* Si la rutina alterna empuje y tirón, recoloca los ejercicios grandes pendientes para seguir alternando */
+function realternate(s,prefer){
+  if(!alternates(s)) return;
+  const idx=[]; s.entries.forEach((e,i)=>{ if(pendingEn(e)&&isBigEn(s,e)) idx.push(i); });
+  if(idx.length<3) return;
+  const pool=idx.map(i=>s.entries[i]), seq=[pool.shift()];
+  while(pool.length){
+    const last=patternOf(getEx(seq[seq.length-1].exerciseId)), ok=pool.filter(e=>patternOf(getEx(e.exerciseId))!==last);
+    const n=ok.includes(prefer)?prefer:ok[0]||pool[0]; pool.splice(pool.indexOf(n),1); seq.push(n);
+  }
+  idx.forEach((v,i)=>{ s.entries[v]=seq[i]; });
+}
+const breakPair=(s,en)=>{ const p=partnerOf(s,en); if(p) delete p.ss; delete en.ss; };
+function busyMove(s,en,a,b){
+  closeSheet(); ui.openEntries={};
+  commit(b?'⇄ Superserie lista':`⇄ Ahora ${exName(a.exerciseId)}`,()=>{
+    breakPair(s,en);
+    const take=b?[a,b]:[a], at=Math.min(...[en,...take].map(e=>s.entries.indexOf(e)));
+    s.entries=s.entries.filter(e=>!take.includes(e)); s.entries.splice(at,0,...take);
+    if(b){ const id=newId(); a.ss=id; b.ss=id; }
+    realternate(s,en);
+  });
+  scrollToEntry(a.id);
+}
+function busyLater(s,en,after){
+  closeSheet(); ui.openEntries={};
+  commit(`⇄ ${exName(en.exerciseId)}, más tarde`,()=>{
+    breakPair(s,en);
+    s.entries=s.entries.filter(e=>e!==en);
+    s.entries.splice(after?s.entries.indexOf(after)+1:s.entries.length,0,en);
+  });
+  const c=s.entries.find(pendingEn); if(c) scrollToEntry(c.id);
+}
+function busySwap(s,en,id){
+  const go=()=>commit(`⇄ Solo hoy: ${exName(id)}`,()=>{ const from=en.busyFrom||en.exerciseId, nx=getEx(id); en.exerciseId=id; en.unit=nx.unit; en.plan=''; en.feel=''; en.pain=''; en.sets=en.sets.map(x=>normalizeSet({kind:x.kind})); if(id===from) delete en.busyFrom; else en.busyFrom=from; });
+  if(en.sets.some(x=>x.done)) confirmSheet('Cambiar ejercicio','Se borrarán las series ya marcadas de este ejercicio.','Cambiar',go,{danger:true}); else go();
+}
+const gearTxt=x=>`${MUSCLES[x.muscle]||x.muscle} · ${EQUIP[x.equipment]||x.equipment}`;
+function busySheet(s,en){
+  const ex=getEx(en.exerciseId), it=slotOf(s,en), O=busyOptions(s,en), c=el('div');
+  if(O.now.length){
+    c.append(el('div','sheet-sec','Hacer ahora'));
+    O.now.forEach((r,i)=>c.append(sheetItem('play',r.x.name,()=>busyMove(s,en,r.e),{small:(i?'':'Sugerido · ')+gearTxt(r.x)})));
+  }
+  const pend=s.entries.filter(e=>pendingEn(e)), bigs=pend.filter(e=>isBigEn(s,e)), big=!!s.routineId&&isBigEn(s,en);
+  const after=big?bigs[bigs.length-1]:pend[pend.length-1];
+  if(after&&after!==en) c.append(sheetItem('clock',big?'Después de los grandes':'Al final de la sesión',()=>busyLater(s,en,after)));
+  if(O.pairs.length){
+    c.append(el('div','sheet-sec','Superserie'));
+    O.pairs.forEach(({a,b})=>c.append(sheetItem('repeat',`${a.x.name} + ${b.x.name}`,()=>busyMove(s,en,a.e,b.e),{small:`${EQUIP[a.x.equipment]} + ${EQUIP[b.x.equipment]}`})));
+  }
+  const inUse=new Set(s.entries.filter(e=>e!==en).map(e=>e.exerciseId));
+  const alts=it?[it.exerciseId,...it.alts].filter((id,i,a)=>a.indexOf(id)===i&&id!==en.exerciseId&&getEx(id)&&!inUse.has(id)):[];
+  c.append(el('div','sheet-sec','Cambiar solo hoy'));
+  alts.forEach(id=>{ const x=getEx(id); c.append(sheetItem('swap',x.name,()=>{ closeSheet(); busySwap(s,en,id); },{small:id===en.busyFrom?'Volver al original':gearTxt(x)})); });
+  if(!alts.length&&ex.tech&&ex.tech.alts.length){ const p=el('p','small muted',ex.tech.alts.join(' · ')); p.style.margin='0 8px 6px'; c.append(p); }
+  c.append(sheetItem('search','Otro ejercicio…',()=>{ closeSheet(); pickExercise('Solo hoy, cambiar por…',id=>{ if(id!==en.exerciseId) busySwap(s,en,id); }); }));
+  if(O.rest.length) c.append(sheetItem('list','Otro orden…',()=>{ closeSheet(); const d=el('div'); O.rest.forEach(r=>d.append(sheetItem('play',r.x.name,()=>busyMove(s,en,r.e),{small:r.why||gearTxt(r.x)}))); openSheet('Hacer ahora',d); }));
+  openSheet('Ocupada · '+ex.name,c);
+}
 function swapSheet(s,en){
   const rt=getRt(s.routineId), it=rt&&rt.items.find(i=>i.id===en.itemId), c=el('div');
   const doSwap=id=>{
     if(id===en.exerciseId) return;
-    const go=()=>commit(`⇄ Cambiado por ${exName(id)}`,()=>{ const nx=getEx(id); en.exerciseId=id; en.unit=nx.unit; en.sets=en.sets.map(x=>normalizeSet({kind:x.kind})); });
+    const go=()=>commit(`⇄ Cambiado por ${exName(id)}`,()=>{ const nx=getEx(id); delete en.busyFrom; en.exerciseId=id; en.unit=nx.unit; en.sets=en.sets.map(x=>normalizeSet({kind:x.kind})); });
     if(en.sets.some(x=>x.done)) confirmSheet('Cambiar ejercicio','Se borrarán las series ya marcadas de este ejercicio.','Cambiar',go,{danger:true}); else go();
   };
   if(it){
@@ -3343,7 +3471,8 @@ function renderHelp(main){
      ['La última vez y la sugerencia son de la misma rutina:','un ejercicio que haces en dos rutinas (p. ej. el remo en máquina en Torso + Hombro y en Full Body + Brazos) lleva su propio peso y sus repeticiones en cada una. Si es la primera vez que lo haces en esa rutina, verás lo que hiciste en la otra (indicando cuál), pero sin sugerencia. En un entrenamiento libre se usa la última vez en cualquier rutina.'],
      ['Subidas de peso en la misma sesión:','subir carga en muchos ejercicios a la vez suma estrés en las mismas articulaciones. Por eso, como mucho 3 ejercicios suben peso en cada sesión (se cambia en Ajustes → Progresión; 0 = sin límite) y, entre los marcados «Cuida lumbar», «Cuida hombro» o «Cuida rodilla», solo uno por zona. Tampoco se propone subir en una zona en la que marcaste una molestia en los 7 días anteriores. Tienen turno primero los que llevan más sesiones esperando al tope, luego los esenciales, los importantes y los prescindibles. Los que esperan muestran «Listo para subir, pero repite…» (icono del escudo) y la línea de arriba de la sesión dice cuántos suben y cuántos esperan; púlsala para ver el detalle. Si aun así quieres subir, pulsa «Subir» en ese ejercicio: manda tu decisión, pero avisa si pasas del límite.'],
      ['Serie de calentamiento, drop set o al fallo:','pulsa el número de la serie.'],
-     ['Máquina ocupada:','botón ⇄ del ejercicio: alternativas de la rutina o cualquier otro ejercicio. La próxima vez que hagas esa rutina se repite el cambio.'],
+     ['Máquina ocupada:','botón «Ocupada» del ejercicio (ver el apartado «Máquina ocupada»).'],
+     ['Cambiar de ejercicio:','botón ⇄: alternativas de la rutina o cualquier otro ejercicio. La próxima vez que hagas esa rutina se repite el cambio.'],
      ['Técnica:','pulsa el nombre del ejercicio o el icono del libro.'],
      ['Descanso:','empieza solo al marcar una serie; abajo puedes restar o sumar 15 s o saltarlo. Al acabar vibra y suena. La pantalla no se apaga mientras estás en la sesión.'],
      ['Descanso con la app minimizada:','Android congela las apps que no están delante, salvo las que reproducen sonido. Por eso el descanso se reproduce como un audio (lo verás en la notificación de reproducción, con su barra de progreso): pita en los 3 últimos segundos y al terminar, aunque la app esté minimizada o la pantalla apagada. Suena con el volumen multimedia: súbelo antes de empezar. En esa notificación, pausa = saltar el descanso. Para que además vibre, permite los avisos en Ajustes → Descanso. Se puede desactivar en Ajustes → Descanso → «Seguir contando con la app minimizada».'],
@@ -3353,6 +3482,13 @@ function renderHelp(main){
      ['«Bien»','significa lo previsto para ese ejercicio (el RIR de la rutina). Molestia pide la zona (lumbar, hombro…).'],
      ['La próxima vez','la caja de color propone qué hacer: subir peso (verde), más repeticiones (verde), repetir (azul) o bajar (ámbar). Las reglas: todas las series al tope y Fácil o Bien → subir; al tope pero Al límite → repetir; dentro del rango → una repetición más (dos si fue Fácil); por debajo del mínimo → repetir, y si se repite, bajar un 10 %; Molestia → nunca subir, bajar o usar la alternativa (con dos seguidas, te lo aconseja).'],
      ['Decidir tú','debajo de la propuesta están «Subir», «Mismo peso» y «Bajar»: tócalos y los valores en gris cambian.']]);
+  H('Máquina ocupada');
+  L([['Hacer ahora:','pulsa «Ocupada» y elige otro ejercicio pendiente. Pasa al primer lugar y el ocupado va justo detrás. Sale primero el sugerido: el primero que permite el orden, mejor si es de otro músculo; a igualdad, si va sin máquina ni banco.'],
+     ['Orden:','se siguen las reglas de la pestaña «Guía»: lo aislado no adelanta a un ejercicio grande (el que descansa 2 min o más en la rutina), el curl femoral va antes del peso muerto rumano, el cardio antes del core y, en Torso + Hombro, se sigue alternando empuje y tirón (los pendientes se recolocan solos). «Otro orden…» muestra los demás y por qué no tocan; decides tú.'],
+     ['Más tarde:','«Al final de la sesión» o, si es un ejercicio grande, «Después de los grandes».'],
+     ['Superserie:','dos ejercicios de aislamiento sin empezar y de distinto músculo, sin ocupar dos puestos a la vez: como mucho una máquina, polea o banco, más mancuernas o peso corporal. No junta ejercicios que carguen la misma zona delicada. Sin descanso entre uno y otro; al terminar los dos, el descanso más largo de ambos. Se quita en ⋯ → «Quitar la superserie». Las poleas se tratan como puestos distintos, aunque fueran dos ejercicios en la misma.'],
+     ['Cambiar solo hoy:','la alternativa ocupa el hueco del ejercicio de hoy, con su propia referencia, y la próxima vez vuelve el original. La tarjeta lo indica con «Solo hoy». Si la máquina se libera, «Ocupada» → el ejercicio original.'],
+     ['Series de aproximación:','no se mueven solas. Si adelantas un ejercicio grande, añádelas con «Calentamiento».']]);
   H('Vuelta tras un parón');
   L([['Qué se mira:','hay parón si el músculo principal del ejercicio lleva 14 días o más sin trabajarse, en cualquier rutina: saltarte un día no lo es si ese músculo se trabaja en otra. Se cuenta el tiempo sin ese músculo o, si es mayor, sin ese ejercicio; así, una sesión suelta en vacaciones no borra el parón.'],
      ['Qué propone:','de 14 a 27 días, no subir (repite el peso); de 4 a 5 semanas, un 10 % menos; de 6 a 11, un 20 % menos; con 12 semanas o más, un 30 % menos. Con mancuernas o máquinas de saltos grandes, el peso disponible más cercano; si un salto fuera casi media carga, repite el peso. Los calentamientos en gris bajan en la misma proporción.'],
@@ -4094,7 +4230,7 @@ $('scrim').addEventListener('click',()=>closeSheet());
 try{ mqDesk.addEventListener('change',()=>renderApp({top:true})); }catch(e){}
 
 /* ================= Arranque ================= */
-window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,applyHevyImport,hashId,suggestFor,refFor,upPlan,planFor,lastLayoff,fatigueSignals,fatigueCheck,lightPlan,deloadActive,startDeload,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState,fingerprint,encryptState,decryptEnv,syncNow,save,commit,get syncCfg(){ return syncCfg; },syncRt};
+window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,applyHevyImport,hashId,suggestFor,refFor,upPlan,planFor,busyOptions,isFree,needsBench,lastLayoff,fatigueSignals,fatigueCheck,lightPlan,deloadActive,startDeload,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState,fingerprint,encryptState,decryptEnv,syncNow,save,commit,get syncCfg(){ return syncCfg; },syncRt};
 (async function boot(){
   applyTheme();
   await bootStore();
