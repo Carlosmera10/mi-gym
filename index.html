@@ -894,7 +894,7 @@ function isPristine(st){
 /* ================= Interfaz (solo en este dispositivo) ================= */
 function loadUI(){
   const d={view:'train',exId:'',routineId:'',sessionId:'',theme:'auto',exMuscle:'',exSearch:'',exTab:'list',histMonths:4,rest:null,lastMode:{},collapsed:{},
-    statPeriod:'3m',statMetric:'dur',calMonth:'',exPane:'',exMetric:'',rtMetric:'vol',chPeriod:'1y',focus:false,openFor:'',openEntries:{},lastTouched:'',justFinished:''};
+    statPeriod:'3m',statMonth:'',statMetric:'dur',calMonth:'',exPane:'',exMetric:'',rtMetric:'vol',chPeriod:'1y',focus:false,openFor:'',openEntries:{},lastTouched:'',justFinished:''};
   try{
     const u=JSON.parse(localStorage.getItem(UI_KEY));
     if(u&&typeof u==='object'){
@@ -2734,7 +2734,7 @@ function sparkline(vals,w=84,h=26){
 }
 function chipSeg(opts,cur,fn,cls=''){ const r=el('div','chips-scroll '+cls); opts.forEach(([k,t])=>{ const b=btn(t,cur===k?'active':'',null,()=>fn(k)); b.setAttribute('aria-pressed',String(cur===k)); r.append(b); }); return r; }
 const CH_PERIODS=[['3m','3 meses'],['6m','6 meses'],['1y','1 año'],['all','Todo']];
-function sinceOf(p){ const t=startOfDay(new Date()); if(p==='3m') return +new Date(t.getFullYear(),t.getMonth()-3,t.getDate()); if(p==='6m') return +new Date(t.getFullYear(),t.getMonth()-6,t.getDate()); if(p==='1y') return +new Date(t.getFullYear()-1,t.getMonth(),t.getDate()); if(p==='4w') return +addDays(weekStart(t),-21); return 0; }
+function sinceOf(p){ const t=startOfDay(new Date()); if(p==='3m') return +new Date(t.getFullYear(),t.getMonth()-3,t.getDate()); if(p==='6m') return +new Date(t.getFullYear(),t.getMonth()-6,t.getDate()); if(p==='1y') return +new Date(t.getFullYear()-1,t.getMonth(),t.getDate()); return 0; }
 const fmtHM=min=>{ min=Math.round(min); const hh=Math.floor(min/60), mm=min%60; return hh?`${hh} h${mm?` ${mm} min`:''}`:`${mm} min`; };
 const axVol=v=>v>=10000?fmtNum(v/1000,0)+' t':fmtNum(v,0);
 
@@ -2757,17 +2757,38 @@ function sessMuscles(s){
 }
 
 /* ================= Estadísticas ================= */
-const ST_PERIODS=[['4w','4 semanas'],['3m','3 meses'],['6m','6 meses'],['1y','1 año'],['all','Todo']];
+const ST_PERIODS=[['month','Mes'],['3m','3 meses'],['6m','6 meses'],['1y','1 año'],['all','Todo']];
+/* Mes elegido en «Mes»: por defecto el actual (no se recuerda al cerrar la app) */
+function statMonthOf(all){
+  const now=new Date(), thisM=new Date(now.getFullYear(),now.getMonth(),1), old=new Date(Math.min(...all.map(s=>tsOf(s.startedAt))));
+  const [y,m]=(ui.statMonth||'').split('-').map(Number), first=y&&m?new Date(y,m-1,1):thisM;
+  return {first,next:new Date(first.getFullYear(),first.getMonth()+1,1),prev:new Date(first.getFullYear(),first.getMonth()-1,1),running:+first>=+thisM,
+    canPrev:+first>+new Date(old.getFullYear(),old.getMonth(),1),canNext:+first<+thisM,
+    go:d=>{ ui.statMonth=+d>=+thisM?'':`${d.getFullYear()}-${pad(d.getMonth()+1)}`; saveUI(); renderApp(); }};
+}
+function monthHead(first,go,lim){
+  const h=el('div','cal-h'), y=first.getFullYear(), m=first.getMonth();
+  const p=btn('','ghost icon small','Mes anterior',()=>go(new Date(y,m-1,1)),'chev-left'), n=btn('','ghost icon small','Mes siguiente',()=>go(new Date(y,m+1,1)),'chev-right');
+  if(lim){ p.disabled=!lim.canPrev; n.disabled=!lim.canNext; }
+  h.append(p,el('b','',fmtMonth(first)),n);
+  return h;
+}
 function renderStats(main){
   main.append(pageHead('Estadísticas'));
   const all=finished();
   if(!all.length){ const e=el('div','empty'); e.append(el('p','','Aún no hay sesiones terminadas.'),btn('Importar historial de Hevy','secondary',null,pickHevyFile,'download')); e.lastChild.style.marginTop='10px'; main.append(e); return; }
+  if(ui.statPeriod==='4w') ui.statPeriod='month';
   if(!ST_PERIODS.some(p=>p[0]===ui.statPeriod)) ui.statPeriod='3m';
   main.append(chipSeg(ST_PERIODS,ui.statPeriod,k=>{ ui.statPeriod=k; saveUI(); renderApp(); }));
-  const today=startOfDay(new Date()), end=+addDays(today,1);
-  let start=sinceOf(ui.statPeriod); if(!start) start=+startOfDay(new Date(all[all.length-1].startedAt));
-  const len=end-start, cur=all.filter(s=>{ const t=tsOf(s.startedAt); return t>=start&&t<end; }), prev=all.filter(s=>{ const t=tsOf(s.startedAt); return t>=start-len&&t<start; });
-  const weeks=Math.max(1,len/(7*DAY_MS));
+  const mo=ui.statPeriod==='month'?statMonthOf(all):null;
+  if(mo) main.append(monthHead(mo.first,mo.go,mo));
+  const today=startOfDay(new Date());
+  let end=+addDays(today,1), start=mo?+mo.first:sinceOf(ui.statPeriod); if(!start) start=+startOfDay(new Date(all[all.length-1].startedAt));
+  if(mo&&+mo.next<end) end=+mo.next;
+  /* En «Mes» se compara con el mes anterior completo, que no tiene por qué durar lo mismo */
+  const len=end-start, prevStart=mo?+mo.prev:start-len, cur=all.filter(s=>{ const t=tsOf(s.startedAt); return t>=start&&t<end; }), prev=all.filter(s=>{ const t=tsOf(s.startedAt); return t>=prevStart&&t<start; });
+  const weeks=Math.max(1,len/(7*DAY_MS)), weeksPrev=mo?(start-prevStart)/(7*DAY_MS):weeks;
+  const vsTxt=mo?dtf('mo',{month:'short'}).format(mo.prev).replace('.',''):'anterior';
   const dash=el('div','dash'); main.append(dash);
   const card=(title,icon,span,sub)=>{ const c=el('section','card '+span); if(title){ const h=el('h2','dc-h'); if(icon) h.append(ic(icon)); h.append(document.createTextNode(title)); c.append(h); } if(sub) c.append(el('div','dc-sub',sub)); dash.append(c); return c; };
 
@@ -2776,23 +2797,24 @@ function renderStats(main){
   const A=agg(cur), B=agg(prev);
   const k=card(null,null,'s12'), g=el('div','kpis'); k.append(g);
   const kpi=(v,l,a,b,f=x=>fmtNum(x,0))=>{ const d=el('div','kpi'); d.append(el('b','',v),el('div','kl',l));
-    if(b!=null&&prev.length){ const diff=a-b, dd=el('div','kd'+(diff>0?' up':diff<0?' down':'')); dd.append(ic(diff>0?'arrow-up':diff<0?'arrow-down':'equal'),document.createTextNode(`${diff>0?'+':''}${f(diff)} vs. anterior`)); d.append(dd); }
+    if(b!=null&&prev.length){ const diff=a-b, dd=el('div','kd'+(diff>0?' up':diff<0?' down':'')); dd.append(ic(diff>0?'arrow-up':diff<0?'arrow-down':'equal'),document.createTextNode(`${diff>0?'+':''}${f(diff)} vs. ${vsTxt}`)); d.append(dd); }
     g.append(d); };
   kpi(String(A.n),'Sesiones',A.n,B.n);
-  kpi(fmtNum(A.n/weeks,1),'Sesiones por semana',A.n/weeks,B.n/weeks,x=>fmtNum(x,1));
+  kpi(fmtNum(A.n/weeks,1),'Sesiones por semana',A.n/weeks,B.n/weeksPrev,x=>fmtNum(x,1));
   kpi(fmtHM(A.min),'Tiempo total',A.min,B.min,x=>fmtHM(Math.abs(x)).replace(/^/,x<0?'−':''));
-  kpi(A.n?fmtHM(A.min/A.n):'—','Duración media',A.n?A.min/A.n:0,B.n?B.min/B.n:0,x=>(x<0?'−':'')+fmtHM(Math.abs(x)));
+  kpi(A.n?fmtHM(A.min/A.n):'—','Duración media',A.n?A.min/A.n:0,A.n&&B.n?B.min/B.n:null,x=>(x<0?'−':'')+fmtHM(Math.abs(x)));
   kpi(fmtVol(A.vol),'Volumen total',A.vol,B.vol,x=>(x<0?'−':'')+fmtVol(Math.abs(x)));
   kpi(fmtNum(A.sets,0),'Series de trabajo',A.sets,B.sets);
   kpi(String(A.pr),'Récords',A.pr,B.pr);
   kpi(pl(weekStreak(all),'semana','semanas'),'Racha actual (≥1 sesión)',null,null);
 
   /* Calendario */
-  const calC=card('Calendario','calendar','s5'); calC.append(calendarBlock(all));
+  const calC=card('Calendario','calendar','s5'); calC.append(calendarBlock(all,mo));
 
   /* Evolución por semana o mes */
   const evo=card('Evolución','chart','s7');
   const monthly=len>200*DAY_MS, bk=bucketsOf(start,end,monthly);
+  if(mo) bk[0].a=new Date(start);
   const METRICS=[['dur','Duración'],['vol','Volumen'],['sets','Series'],['ses','Sesiones']];
   if(!METRICS.some(m=>m[0]===ui.statMetric)) ui.statMetric='dur';
   evo.append(chipSeg(METRICS,ui.statMetric,m=>{ ui.statMetric=m; saveUI(); renderApp(); },'small'));
@@ -2805,20 +2827,21 @@ function renderStats(main){
   evo.append(barChart(bk.map(b=>({v:mk(b),label:monthly?dtf('mo',{month:'short'}).format(b.a).replace('.',''):`${b.a.getDate()}/${b.a.getMonth()+1}`,tip:monthly?fmtMonth(b.a):`Semana del ${fmtDate(ymd(b.a),{year:true})}`})),{fmt:ff,axis:ax,h:220}));
 
   /* Series por músculo y semana (mapa de calor) */
-  const nW=Math.min(isDesk()?12:6,Math.max(4,Math.round(weeks)));
-  const hmC=card('Series por músculo y semana','dumbbell','s7',`Últimas ${nW} semanas. El principal cuenta 1 serie y cada secundario 0,5.`);
-  hmC.append(muscleHeat(all,nW));
+  const lastW=mo?weekStart(addDays(new Date(end),-1)):null;
+  const nW=mo?Math.max(4,Math.round((+lastW-+weekStart(mo.first))/(7*DAY_MS))+1):Math.min(isDesk()?12:6,Math.max(4,Math.round(weeks)));
+  const hmC=card('Series por músculo y semana','dumbbell','s7',`${mo&&!mo.running?`Semanas de ${fmtMonth(mo.first).toLowerCase()}`:`Últimas ${nW} semanas`}. El principal cuenta 1 serie y cada secundario 0,5.`);
+  hmC.append(muscleHeat(all,nW,lastW));
 
   /* Distribución frente al periodo anterior */
-  const dC=card('Series por semana y músculo','trend','s5','Media semanal del periodo frente al anterior. Zona verde: 10–20 series, referencia orientativa para ganar músculo.');
-  dC.append(muscleDist(cur,prev,weeks));
+  const dC=card('Series por semana y músculo','trend','s5',`Media semanal del ${mo?'mes':'periodo'} frente al anterior. Zona verde: 10–20 series, referencia orientativa para ganar músculo.`);
+  dC.append(muscleDist(cur,prev,weeks,weeksPrev,mo?[fmtMonth(mo.first),fmtMonth(mo.prev)]:undefined));
 
   /* Rutinas hechas */
   const rC=card('Rutinas hechas','list','s4'); rC.append(routineCounts(cur));
   /* Ejercicios principales */
   const tC=card('Ejercicios principales','dumbbell','s4','Los que más has hecho y cómo ha cambiado su 1RM estimado'); tC.append(topExercises(cur));
   /* Récords */
-  const pC=card('Récords del periodo','trophy','s4'); pC.append(recordsList(cur));
+  const pC=card(mo?'Récords del mes':'Récords del periodo','trophy','s4'); pC.append(recordsList(cur));
   /* Estancados */
   const sC=card('Estancados','alert','s6','Ejercicios sin mejorar su mejor marca en las 3 últimas sesiones'); sC.append(stalledList());
   /* Sensaciones y molestias */
@@ -2836,15 +2859,14 @@ function bucketsOf(start,end,monthly){
   while(+d<end){ const n=monthly?new Date(d.getFullYear(),d.getMonth()+1,1):addDays(d,7); out.push({a:d,b:n}); d=n; }
   return out;
 }
-function calendarBlock(all){
+function calendarBlock(all,mo){
   const box=el('div');
   const now=new Date(); let [y,m]=(ui.calMonth||'').split('-').map(Number);
   if(!y||!m){ y=now.getFullYear(); m=now.getMonth()+1; }
+  if(mo){ y=mo.first.getFullYear(); m=mo.first.getMonth()+1; }
   const first=new Date(y,m-1,1), next=new Date(y,m,1);
-  const go=d=>{ ui.calMonth=`${d.getFullYear()}-${pad(d.getMonth()+1)}`; saveUI(); renderApp(); };
-  const h=el('div','cal-h');
-  h.append(btn('','ghost icon small','Mes anterior',()=>go(new Date(y,m-2,1)),'chev-left'),el('b','',fmtMonth(first)),btn('','ghost icon small','Mes siguiente',()=>go(next),'chev-right'));
-  box.append(h);
+  const go=mo?mo.go:d=>{ ui.calMonth=`${d.getFullYear()}-${pad(d.getMonth()+1)}`; saveUI(); renderApp(); };
+  box.append(monthHead(first,go,mo));
   const byDay=new Map(); all.forEach(s=>{ if(!byDay.has(s.date)) byDay.set(s.date,[]); byDay.get(s.date).push(s); });
   const g=el('div','cal-g'); ['L','M','X','J','V','S','D'].forEach(d=>g.append(el('div','cal-wd',d)));
   let d=weekStart(first); const tk=todayStr(), used=new Map(), monthSes=[];
@@ -2868,8 +2890,8 @@ function calendarBlock(all){
   box.append(sm);
   return box;
 }
-function muscleHeat(all,nW){
-  const box=el('div'), w0=weekStart(new Date()), weeks=[]; for(let i=nW-1;i>=0;i--) weeks.push(addDays(w0,-7*i));
+function muscleHeat(all,nW,lastW){
+  const box=el('div'), w0=lastW||weekStart(new Date()), weeks=[]; for(let i=nW-1;i>=0;i--) weeks.push(addDays(w0,-7*i));
   const data={}; all.forEach(s=>{ const ws=ymd(weekStart(new Date(s.startedAt))), i=weeks.findIndex(w=>ymd(w)===ws); if(i<0) return; const m=sessMuscles(s); Object.keys(m).forEach(k=>{ (data[k]=data[k]||Array(nW).fill(0))[i]+=m[k]; }); });
   const rows=Object.keys(data).sort((a,b)=>data[b].reduce((x,y)=>x+y,0)-data[a].reduce((x,y)=>x+y,0));
   if(!rows.length){ box.append(el('div','chart-empty','Sin series en estas semanas')); return box; }
@@ -2885,21 +2907,21 @@ function muscleHeat(all,nW){
   box.append(lg);
   return box;
 }
-function muscleDist(cur,prev,weeks){
+function muscleDist(cur,prev,weeks,weeksPrev=weeks,names=['Este periodo','Periodo anterior']){
   const box=el('div','dist'), sum=list=>{ const m={}; list.forEach(s=>{ const x=sessMuscles(s); Object.keys(x).forEach(k=>{ m[k]=(m[k]||0)+x[k]; }); }); return m; };
   const A=sum(cur), B=sum(prev), keys=[...new Set([...Object.keys(A),...Object.keys(B)])].sort((a,b)=>(A[b]||0)-(A[a]||0));
   if(!keys.length){ box.append(el('div','chart-empty','Sin datos')); return box; }
-  const max=Math.max(22,...keys.map(k=>Math.max((A[k]||0)/weeks,(B[k]||0)/weeks)));
+  const max=Math.max(22,...keys.map(k=>Math.max((A[k]||0)/weeks,(B[k]||0)/weeksPrev)));
   keys.forEach(k=>{
-    const a=(A[k]||0)/weeks, b=(B[k]||0)/weeks, r=el('div','drow'); r.title=`${MUSCLES[k]}: ${fmtNum(a,1)} series/semana (antes ${fmtNum(b,1)})`;
+    const a=(A[k]||0)/weeks, b=(B[k]||0)/weeksPrev, r=el('div','drow'); r.title=`${MUSCLES[k]}: ${fmtNum(a,1)} series/semana (antes ${fmtNum(b,1)})`;
     const t=el('div','dtrk'), band=el('span','dband'); band.style.left=(100*10/max)+'%'; band.style.width=(100*10/max)+'%';
     const c=el('span','dcur'); c.style.width=(100*a/max)+'%'; const p=el('span','dprev'); p.style.width=(100*b/max)+'%';
     t.append(band,c,p);
     const v=el('div','dv',fmtNum(a,1)); v.append(el('small','',`antes ${fmtNum(b,1)}`));
     r.append(el('span','dl',MUSCLES[k]),t,v); box.append(r);
   });
-  const lg=el('div','legend'); const l1=el('span'); const s1=el('i','sw'); s1.style.setProperty('--c','var(--accent)'); l1.append(s1,document.createTextNode('Este periodo'));
-  const l2=el('span'); const s2=el('i','sw'); s2.style.setProperty('--c','var(--line-strong)'); l2.append(s2,document.createTextNode('Periodo anterior'));
+  const lg=el('div','legend'); const l1=el('span'); const s1=el('i','sw'); s1.style.setProperty('--c','var(--accent)'); l1.append(s1,document.createTextNode(names[0]));
+  const l2=el('span'); const s2=el('i','sw'); s2.style.setProperty('--c','var(--line-strong)'); l2.append(s2,document.createTextNode(names[1]));
   const l3=el('span'); const s3=el('i','sw'); s3.style.setProperty('--c','var(--done-soft)'); s3.style.outline='1px dashed var(--done-line)'; l3.append(s3,document.createTextNode('10–20 series'));
   lg.append(l1,l2,l3); box.append(lg);
   return box;
@@ -3152,6 +3174,7 @@ function renderHelp(main){
      'El 1RM estimado usa la fórmula de Epley (peso × (1 + reps / 30)), solo con series de hasta 15 repeticiones.']);
   H('Estadísticas');
   L(['Pestaña «Progreso» en el móvil o «Estadísticas» en el ordenador. Elige el periodo arriba.',
+     'El periodo «Mes» muestra el mes actual y, con las flechas, los anteriores. Cada mes se compara con el anterior completo. Mientras el mes está en curso, los totales van por debajo hasta que termina; las medias (sesiones por semana, duración media y series por semana) sí se pueden comparar desde el principio.',
      'Resumen con comparación con el periodo anterior, calendario del mes con la abreviatura de cada rutina (toca un día para abrir la sesión), evolución por semana o mes, series por músculo y semana, rutinas hechas, ejercicios principales, récords, estancados y molestias.',
      'Cada ejercicio tiene la pestaña «Progreso» (gráfica de mayor peso, 1RM estimado, mejor serie, volumen y repeticiones; récords personales y récords por repeticiones). Cada rutina, su gráfica de volumen, repeticiones, duración y series.',
      'Abreviatura de una rutina en el calendario: abre la rutina → ⋯ → «Abreviatura en el calendario».']);
