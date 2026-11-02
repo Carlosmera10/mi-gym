@@ -350,7 +350,7 @@ button.nl:hover{background:var(--hover)}
 .fb.f-hard.on{background:var(--warn-bg);border-color:var(--warn);color:var(--warn-ink)}
 .fb.f-pain.on{background:var(--danger-soft);border-color:var(--danger);color:var(--danger)}
 .sugg-box{border-radius:10px;padding:8px 10px;margin:2px 0 8px;border:1px solid}
-.sugg-box.k-up,.sugg-box.k-up-reps{background:var(--done-soft);border-color:var(--done-line);color:var(--done)}
+.sugg-box.k-up,.sugg-box.k-up-reps,.sugg-box.k-back{background:var(--done-soft);border-color:var(--done-line);color:var(--done)}
 .sugg-box.k-same{background:var(--info-bg);border-color:var(--info-line);color:var(--info-ink)}
 .sugg-box.k-down,.sugg-box.k-pain{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
 .sugg-t{display:flex;gap:8px;align-items:flex-start;font-size:.9rem}
@@ -358,6 +358,7 @@ button.nl:hover{background:var(--hover)}
 .sugg-c{display:flex;gap:6px;margin-top:8px}
 .sugg-warn{margin-top:6px;color:var(--warn-ink)}
 .ups-line{display:flex;align-items:center;gap:8px;width:100%;margin-top:10px;padding:8px 10px;min-height:44px;border-radius:10px;border:1px solid var(--info-line);background:var(--info-bg);color:var(--info-ink);font:inherit;font-size:.88rem;text-align:left;cursor:pointer}
+.ups-line.light{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn-ink)}
 .ups-line .ic{flex:none;width:16px;height:16px}
 .ups-line span{flex:1;min-width:0}
 .ups-it{display:flex;gap:10px;align-items:flex-start;padding:10px 4px;border-bottom:1px solid var(--line)}
@@ -812,13 +813,15 @@ function normalizeSession(s){
   return {id:str(s.id,80)||newId(),routineId:str(s.routineId,80),name:str(s.name,100).trim()||'Entrenamiento',
     date:parseYMD(s.date)?s.date:ymd(new Date(startedAt)),startedAt,endedAt:validIso(s.endedAt)?new Date(s.endedAt).toISOString():'',
     notes:str(s.notes,2000),src:s.src==='hevy'?'hevy':'',mode:['full','45','30'].includes(s.mode)?s.mode:'full',
+    ...(s.deload?{deload:true}:{}),...(s.cbOff?{cbOff:true}:{}),
     entries:(Array.isArray(s.entries)?s.entries:[]).map(normalizeEntry),updatedAt:validIso(s.updatedAt)?s.updatedAt:''};
 }
 function normalizeSettings(s){
   s=s&&typeof s==='object'?s:{};
   return {restDefault:intOr(s.restDefault,90,0,900),autoRest:s.autoRest!==false,sound:s.sound!==false,bgRest:s.bgRest!==false,vibrate:s.vibrate!==false,
     kgStep:clamp(parseNum(s.kgStep)??2.5,0.25,20),lbStep:clamp(parseNum(s.lbStep)??5,0.5,40),
-    maxUps:intOr(s.maxUps,3,0,10),zoneGuard:s.zoneGuard!==false,
+    maxUps:intOr(s.maxUps,3,0,10),zoneGuard:s.zoneGuard!==false,comeback:s.comeback!==false,deloadAlert:s.deloadAlert!==false,
+    deloadUntil:parseYMD(s.deloadUntil)?s.deloadUntil:'',deloadSnooze:parseYMD(s.deloadSnooze)?s.deloadSnooze:'',
     lastBackup:validIso(s.lastBackup)?s.lastBackup:'',backupSnooze:validIso(s.backupSnooze)?s.backupSnooze:''};
 }
 function normalizeDeleted(d){
@@ -1277,7 +1280,7 @@ const kindLabel=(x,n)=>KIND_LBL[x.kind]||String(n);
 function lastBefore(exId,s){ return exHistory(exId).find(h=>h.s.id!==s.id&&h.s.startedAt<s.startedAt)||null; }
 /* Decisión para la próxima vez: combina las repeticiones de la última vez con la sensación y la molestia.
    kind: up (subir peso) · up-reps (mismo peso, más reps) · same (repetir) · down (bajar) · pain (molestia) */
-const KIND_DIR={up:'up','up-reps':'same',same:'same',down:'down',pain:'down'};
+const KIND_DIR={up:'up',back:'up','up-reps':'same',same:'same',down:'down',pain:'down'};
 const stepFor=unit=>unit==='lb'?appState.settings.lbStep:appState.settings.kgStep;
 /* ---- Salto de peso de cada ejercicio ----
    Cada máquina, polea o juego de mancuernas sube distinto. Orden: 1) el que pongas en el ejercicio (ex.stepKg);
@@ -1314,14 +1317,14 @@ function stepInfo(ex,unit){
 const fmtStep=(kg,unit)=>unit==='lb'?fmtNum(Math.round(kg/LB*2)/2,1)+' lb':fmtNum(Math.round(kg*100)/100,2)+' kg';
 const STEP_SRC={own:'el tuyo',hist:'el habitual en tu historial',def:'por el material'};
 const roundKg=(kg,unit)=>fromUnit(toUnit(kg,unit),unit);
-function shiftKg(kg,ex,unit,dir){
+function shiftKg(kg,ex,unit,dir,pct=0.1){
   const step=stepInfo(ex,unit).kg, ws=ex?usedWeights(ex.id).ws:[], eps=0.05;
   if(dir>0){
     const nx=ws.find(w=>w>=kg+Math.max(eps,step*0.4));
     if(nx!=null&&nx-kg<=step*2+eps) return nx;
     return roundKg(kg+step,unit);
   }
-  const dec=Math.max(step,Math.round(kg*0.1/step)*step), t=kg-dec;
+  const dec=Math.max(step,Math.round(kg*pct/step)*step), t=kg-dec;
   let best=null;
   ws.forEach(w=>{ if(w<kg-eps&&Math.abs(w-t)<=step/2+eps&&(best==null||Math.abs(w-t)<Math.abs(best-t))) best=w; });
   if(best!=null) return best;
@@ -1375,7 +1378,7 @@ function applyPlan(sg,plan,item,unit){
    rutina, se muestra la última vez en otra (marcada) pero sin propuesta. Sin rutina: la última vez en cualquiera. */
 function refFor(s,en){
   const ex=getEx(en.exerciseId), rt=getRt(s.routineId), item=rt?rt.items.find(i=>i.id===en.itemId)||null:null;
-  let hist=exHistory(en.exerciseId).filter(h=>h.s.id!==s.id&&h.s.startedAt<s.startedAt), other=null;
+  let hist=exHistory(en.exerciseId).filter(h=>h.s.id!==s.id&&h.s.startedAt<s.startedAt&&!h.s.deload), other=null; // la descarga no es referencia: al acabar se sigue desde el peso normal
   if(s.routineId){
     let same=hist.filter(h=>h.s.routineId===s.routineId);
     /* Si el ejercicio está dos veces en la rutina, cada hueco con su propia historia */
@@ -1383,8 +1386,165 @@ function refFor(s,en){
     if(same.length) hist=same; else { other=hist[0]||null; hist=[]; }
   }
   const last=hist[0]||other, prev2=hist[1]||null;
-  const base=item&&!other?suggestFor(ex,item,last,en.unit,prev2):null;
+  let base=item&&!other?suggestFor(ex,item,last,en.unit,prev2):null;
+  if(base&&!s.endedAt) base=lightBase(s,base,ex,item,hist,en.unit);
   return {ex,rt,item,hist,last,prev2,other,base};
+}
+/* ---- Vuelta tras un parón ----
+   Hay parón si el músculo principal del ejercicio lleva 14 días o más sin trabajarse, en cualquier rutina: saltarse un día no lo es.
+   Su duración es la del músculo o, si es mayor, el tiempo sin ese ejercicio (una sesión suelta en vacaciones no borra el parón).
+   Metaanálisis de Bosquet (2013): la fuerza máxima apenas baja hasta unas 4 semanas. Por eso:
+   14–27 días, no se sube; 4–5 semanas, −10 %; 6–11 semanas, −20 %; 12 o más, −30 %.
+   En su vuelta de septiembre de 2026 (7–8 semanas), Carlos bajó un 20 % de media por su cuenta.
+   Después se recupera un 10 % por sesión de ese ejercicio hasta el peso de antes. Los porcentajes son una regla prudente.
+   Todo se deduce del historial: no se guarda nada y mandan siempre tus botones. */
+const LAYOFF_MIN=14, STALE_DAYS=21, RAMP_MAX=6, LAYOFF_CUTS=[[84,.3],[42,.2],[28,.1]];
+const layoffCut=d=>(LAYOFF_CUTS.find(x=>d>=x[0])||[0,0])[1];
+const fmtGap=d=>d<28?`${d} días`:`${Math.floor(d/7)} semanas`;
+let musCache={rev:-1,map:null};
+function muscleDays(m){
+  if(musCache.rev!==dataRev){
+    const map=new Map();
+    finished().forEach(s=>{ const seen=new Set(), t=tsOf(s.startedAt);
+      s.entries.forEach(en=>{ const ex=getEx(en.exerciseId); if(!ex||seen.has(ex.muscle)||!en.sets.some(x=>x.done&&x.kind!=='warmup')) return; seen.add(ex.muscle); if(!map.has(ex.muscle)) map.set(ex.muscle,[]); map.get(ex.muscle).push(t); }); });
+    map.forEach(a=>a.sort((x,y)=>x-y)); musCache={rev:dataRev,map};
+  }
+  return musCache.map.get(m)||[];
+}
+/* Último parón de un músculo antes de t. after = sesiones de ese músculo desde que volvió */
+function lastLayoff(m,t){
+  const a=muscleDays(m).filter(x=>x<t);
+  for(let i=a.length-1,n=0;i>=0&&n<12;i--,n++){
+    const to=i===a.length-1?t:a[i+1], days=Math.floor((to-a[i])/DAY_MS);
+    if(days>=LAYOFF_MIN) return {from:a[i],to,days,after:a.length-1-i};
+  }
+  return null;
+}
+/* Duración del parón para un ejercicio y veces que ya se ha hecho desde la vuelta, en cualquier rutina */
+function layoffOf(ex,L,t){
+  const hs=exHistory(ex.id), h=hs.find(x=>tsOf(x.s.startedAt)<=L.from);
+  return {days:Math.max(L.days,h?Math.floor((L.to-tsOf(h.s.startedAt))/DAY_MS):0),done:hs.filter(x=>{ const v=tsOf(x.s.startedAt); return v>=L.to&&v<t; }).length};
+}
+const topWork=en=>{ const w=en.sets.filter(x=>x.done&&x.kind!=='warmup'&&x.reps!=null&&x.kg!=null); if(!w.length) return null; const kg=Math.max(...w.map(x=>x.kg)); return {kg,reps:w.filter(x=>Math.abs(x.kg-kg)<0.01).map(x=>x.reps)}; };
+/* Siguiente peso al recuperar: como mucho un 10 % del peso de antes, sin pasarse de él */
+function stepBack(w,w0,ex,u){
+  const t=Math.min(w0,w+w0*0.1); let k=shiftKg(w,ex,u,1);
+  if(k>=w0-0.01) return w0;
+  for(let i=0;i<8;i++){ const nx=shiftKg(k,ex,u,1); if(nx>t+0.01||nx<=k) break; k=nx; }
+  return Math.min(k,w0);
+}
+function comebackFor(s,base,ex,item,hist,u){
+  if(!appState.settings.comeback||s.cbOff) return null;
+  const t=tsOf(s.startedAt), L=lastLayoff(ex.muscle,t), low=item.repMin, top=item.repMax;
+  const fitReps=a=>top==null?a:a.map(r=>clamp(r,low,top));
+  const W=x=>`${fmtW(x,u)} ${u}`, rising=base.kind==='up'||base.kind==='up-reps';
+  const idx=L?hist.findIndex(h=>tsOf(h.s.startedAt)<=L.from):-1, G=idx>=0?layoffOf(ex,L,t):null;
+  if(idx===0){
+    const pct=layoffCut(G.days)-0.1*G.done;
+    if(pct>0.001){
+      const kg=shiftKg(base.w,ex,u,-1,pct), less=(base.w-kg)/base.w;
+      if(base.kind==='pain') return {...base,kg:Math.min(base.kg,kg),ramp:true,text:`${base.text}. Tras ${fmtGap(G.days)}, mejor ${W(Math.min(base.kg,kg))}`};
+      /* Con pesos muy ligeros, un salto puede ser media carga: mejor repetir */
+      if(less>pct+0.15) return {...base,kind:'same',kg:base.w,reps:fitReps(base.lastReps),ramp:true,text:`Vuelta tras ${fmtGap(G.days)}: repite ${W(base.w)}, sin apurar`};
+      return {...base,kind:'down',kg,reps:fitReps(base.lastReps),ramp:true,text:`Vuelta tras ${fmtGap(G.days)}: ${W(kg)}, un ${Math.round(less*100)} % menos`};
+    }
+    if(!G.done&&rising) return {...base,kind:'same',kg:base.w,reps:base.lastReps,ramp:true,text:`${fmtGap(G.days)} sin trabajarlo: repite ${W(base.w)} antes de subir`};
+  } else if(idx>0&&idx<=RAMP_MAX&&layoffCut(G.days)>0&&base.kind!=='pain'){
+    const pre=topWork(hist[idx].en), last=hist[0].en;
+    if(pre&&base.w<pre.kg-0.01){
+      const want=fitReps(pre.reps), reached=base.lastReps.every((r,i)=>r>=want[Math.min(i,want.length-1)]);
+      if(last.feel==='hard'||(low!=null&&base.lastReps.some(r=>r<low))) return {...base,kind:'same',kg:base.w,reps:base.lastReps,ramp:true,text:`Recuperando: repite ${W(base.w)} (${last.feel==='hard'?'fue al límite':`no llegaste a ${low}`})`};
+      if(!reached) return {...base,kind:'same',kg:base.w,reps:want,ramp:true,text:`Recuperando: repite ${W(base.w)} hasta ${want[0]} repeticiones`};
+      const kg=stepBack(base.w,pre.kg,ex,u);
+      return {...base,kind:'back',kg,reps:want,ramp:true,text:`Recuperando: sube a ${W(kg)}${kg<pre.kg?` · antes del parón, ${W(pre.kg)}`:', el peso de antes del parón'}`};
+    }
+  }
+  /* El músculo ha seguido trabajando, pero este ejercicio lleva semanas parado (p. ej. lo cambiaste por su alternativa) */
+  const h0=exHistory(ex.id).find(h=>h.s.id!==s.id&&tsOf(h.s.startedAt)<t), d=h0?Math.floor((t-tsOf(h0.s.startedAt))/DAY_MS):0;
+  if(rising&&d>=STALE_DAYS) return {...base,kind:'same',kg:base.w,reps:base.lastReps,ramp:true,text:`${fmtGap(d)} sin hacer este ejercicio: repite ${W(base.w)} antes de subir`};
+  return null;
+}
+/* ---- Semana de descarga ----
+   Menos estrés para quitar fatiga sin dejar de entrenar: 60 % de las series, 10 % menos de peso y sin apurar.
+   Solo se propone con señales de fatiga. Las sesiones de descarga no cuentan como referencia. */
+const DELOAD_PCT=0.1, DELOAD_DAYS=7, DELOAD_SNOOZE=14, FATIGUE_DAYS=14, FATIGUE_MIN_WEEKS=3, FATIGUE_SHARE=1/3, FATIGUE_MIN_HARD=8, FATIGUE_MIN_CMP=6;
+const deloadSets=n=>Math.max(1,Math.round(n*0.6));
+const deloadActive=()=>{ const u=appState.settings.deloadUntil; return !!u&&u>=todayStr(); };
+function lightBase(s,base,ex,item,hist,u){
+  if(base.w==null||ex.type!=='peso_reps') return base;
+  const cb=comebackFor(s,base,ex,item,hist,u); let out=cb||base;
+  if(s.deload){
+    const dn=shiftKg(base.w,ex,u,-1,DELOAD_PCT), kg=Math.min((base.w-dn)/base.w>0.25?base.w:dn,out.kg??base.w), top=item.repMax, reps=top==null?base.lastReps:base.lastReps.map(r=>clamp(r,item.repMin,top));
+    out={...out,kind:out.kind==='pain'?'pain':kg<base.w?'down':'same',kg,reps,ramp:true,deload:true,text:out.kind==='pain'?out.text:kg<base.w?`Descarga: ${fmtW(kg,u)} ${u}, sin apurar`:`Descarga: repite ${fmtW(kg,u)} ${u}, sin apurar`};
+  }
+  return out;
+}
+/* Señales de fatiga desde la última descarga o el último parón: «Al límite» en un tercio o más de los ejercicios,
+   o retrocesos (menos peso, o menos repeticiones con el mismo peso) en un tercio o más de las comparaciones (últimos 14 días). */
+function fatigueSignals(asOf){
+  const F=finished().filter(s=>tsOf(s.startedAt)<=asOf).sort((a,b)=>tsOf(a.startedAt)-tsOf(b.startedAt));
+  let since=0;
+  F.forEach((s,i)=>{ const t=tsOf(s.startedAt); if(s.deload) since=Math.max(since,t); else if(i&&t-tsOf(F[i-1].startedAt)>=LAYOFF_MIN*DAY_MS) since=Math.max(since,t); });
+  const from=Math.max(since,asOf-FATIGUE_DAYS*DAY_MS), rec=F.filter(s=>tsOf(s.startedAt)>from&&!s.deload&&s.routineId);
+  let rated=0,hard=0,cmp=0,drops=0;
+  rec.forEach(s=>s.entries.forEach(en=>{
+    const ex=getEx(en.exerciseId); if(!ex||ex.type!=='peso_reps') return;
+    if(en.feel){ rated++; if(en.feel==='hard') hard++; }
+    const now=topWork(en); if(!now) return;
+    const p=exHistory(en.exerciseId).find(h=>h.s.routineId===s.routineId&&!h.s.deload&&h.s.startedAt<s.startedAt&&(!en.itemId||h.en.itemId===en.itemId)); if(!p||tsOf(s.startedAt)-tsOf(p.s.startedAt)>=LAYOFF_MIN*DAY_MS) return;
+    const pv=topWork(p.en); if(!pv) return;
+    const n=Math.min(pv.reps.length,now.reps.length); if(!n) return;
+    const sum=a=>a.slice(0,n).reduce((x,y)=>x+y,0); cmp++;
+    if(now.kg<pv.kg*0.98||(Math.abs(pv.kg-now.kg)<=0.01&&(sum(pv.reps)-sum(now.reps))/n>=1)) drops++;
+  }));
+  return {since,weeks:(asOf-(since||(F[0]?tsOf(F[0].startedAt):asOf)))/(7*DAY_MS),rated,hard,cmp,drops};
+}
+let fatigueCache={key:'',v:null};
+function fatigueCheck(){
+  const st=appState.settings, today=todayStr(), key=dataRev+'|'+today+'|'+st.deloadAlert+'|'+st.deloadSnooze;
+  if(fatigueCache.key===key) return fatigueCache.v;
+  let v=null;
+  if(st.deloadAlert&&!(st.deloadSnooze&&st.deloadSnooze>=today)){
+    const f=fatigueSignals(Date.now()), why=[];
+    if(f.weeks>=FATIGUE_MIN_WEEKS){
+      if(f.rated>=FATIGUE_MIN_HARD&&f.hard/f.rated>=FATIGUE_SHARE) why.push(`Al límite en ${f.hard} de ${pl(f.rated,'ejercicio','ejercicios')}`);
+      if(f.cmp>=FATIGUE_MIN_CMP&&f.drops/f.cmp>=FATIGUE_SHARE) why.push(`Menos peso o repeticiones en ${f.drops} de ${pl(f.cmp,'ejercicio','ejercicios')}`);
+    }
+    if(why.length) v={why};
+  }
+  fatigueCache={key,v}; return v;
+}
+function startDeload(){
+  const t=new Date();
+  appState.settings.deloadUntil=ymd(addDays(t,DELOAD_DAYS-1)); appState.settings.deloadSnooze=ymd(addDays(t,DELOAD_SNOOZE));
+  setSetting('deloadUntil',appState.settings.deloadUntil,'📅 Semana de descarga en marcha'); renderApp();
+}
+function endDeload(){ setSetting('deloadUntil',''); renderApp(); }
+function deloadSheet(F){
+  const c=el('div'), add=(icon,t)=>{ const d=el('div','ups-it'), x=el('div'); x.append(el('b','',t)); d.append(ic(icon),x); c.append(d); };
+  if(F) F.why.forEach(t=>add('alert',t));
+  add('calendar',`${DELOAD_DAYS} días`); add('list','60 % de las series'); add('arrow-down','10 % menos de peso, sin apurar');
+  const acts=[];
+  if(F) acts.push(btn('Ahora no','secondary',null,()=>{ closeSheet(); setSetting('deloadSnooze',ymd(addDays(new Date(),DELOAD_SNOOZE))); renderApp(); }));
+  else acts.push(btn('Cancelar','secondary',null,()=>closeSheet()));
+  acts.push(btn('Empezar','',null,()=>{ closeSheet(); startDeload(); },'play'));
+  openSheet('Semana de descarga',c,{actions:acts});
+}
+/* Resumen de lo que hoy se hace con menos carga (vuelta tras un parón o descarga) */
+function lightPlan(s){
+  const items=[]; let maxGap=0;
+  s.entries.forEach(en=>{ const R=refFor(s,en), b=R.base; if(!b||!b.ramp) return;
+    if(!s.deload){ const L=lastLayoff(R.ex.muscle,tsOf(s.startedAt)); if(L&&L.days>maxGap) maxGap=L.days; }
+    items.push({name:R.ex.name,b,u:en.unit}); });
+  return items.length||s.deload?{items,maxGap}:null;
+}
+function lightSheet(s,C){
+  const c=el('div');
+  C.items.forEach(({name,b,u})=>{ const d=el('div','ups-it'), x=el('div'); x.append(el('b','',name),el('span','small muted',b.kg!==b.w?`${fmtW(b.w,u)} → ${fmtW(b.kg,u)} ${u}`:`Repite ${fmtW(b.w,u)} ${u}`)); d.append(ic(b.kind==='back'?'trend':b.kind==='same'?'equal':'arrow-down'),x); c.append(d); });
+  openSheet(s.deload?'Sesión de descarga':'Vuelta tras un parón',c,{actions:[btn('Cerrar','secondary',null,()=>closeSheet()),btn('Hoy, normal','',null,()=>{ closeSheet(); commit('✅ Sesión normal',()=>{
+    if(s.deload){ delete s.deload; const rt=getRt(s.routineId); s.entries.forEach(en=>{ const it=rt&&rt.items.find(i=>i.id===en.itemId), ex=getEx(en.exerciseId); if(!it||!ex||ex.type!=='peso_reps') return; let n=en.sets.filter(x=>x.kind!=='warmup').length; while(n++<it.sets) en.sets.push(normalizeSet({})); }); }
+    s.cbOff=true;
+  }); })]});
 }
 /* ---- Control de subidas de peso en la misma sesión ----
    Subir carga en muchos ejercicios a la vez suma estrés en las mismas articulaciones. Reglas (Ajustes → Progresión):
@@ -1423,6 +1583,12 @@ function upPlan(s){
     const limit=st.maxUps>0?st.maxUps:Infinity, pain=st.zoneGuard?recentPain(s):new Map(), zoneUsed=new Map(), allowed=[];
     const refs=s.entries.map((en,i)=>({en,i,r:refFor(s,en)}));
     const zonesOf=ex=>st.zoneGuard?ex.careFlags.filter(z=>ZONE_TXT[z]):[];
+    /* Recuperar el peso de antes de un parón no cuenta para el máximo, pero respeta las molestias recientes y ocupa la zona */
+    refs.filter(c=>c.r.base&&c.r.base.kind==='back'&&!c.en.plan).forEach(c=>{
+      const b=c.r.base, ex=c.r.ex, u=c.en.unit, zs=zonesOf(ex), pz=zs.find(z=>pain.has(z));
+      if(pz){ const why=`Molestia en ${ZONE_TXT[pz]} el ${fmtDate(pain.get(pz))}`; v.adj.set(c.en.id,{...b,kind:'same',kg:b.w,reps:b.lastReps,held:true,text:`Recuperando, pero repite ${fmtW(b.w,u)} ${u}. ${why}`}); v.held.push({name:ex.name,why}); }
+      else zs.forEach(z=>{ if(!zoneUsed.has(z)) zoneUsed.set(z,ex.name); });
+    });
     const cands=refs.filter(c=>c.r.base&&c.r.base.kind==='up'&&!c.en.plan)
       .map(c=>({...c,wait:topStreak(c.r.hist,c.r.item),pr:{E:0,I:1,P:2}[c.r.item.prio]??1}))
       .sort((a,b)=>b.wait-a.wait||a.pr-b.pr||a.i-b.i);
@@ -1461,9 +1627,11 @@ function planFor(s,en){
   if(sugg&&U.warn.has(en.id)) sugg={...sugg,warn:U.warn.get(en.id)};
   const lw=last?last.en.sets.filter(x=>x.done&&x.kind==='warmup'):[], ln=last?last.en.sets.filter(x=>x.done&&x.kind!=='warmup'):[];
   let iw=0,inn=0;
+  /* Con menos peso, los calentamientos bajan en proporción */
+  const wScale=sugg&&sugg.ramp&&sugg.kg!=null&&sugg.w>0&&sugg.kg<sugg.w?sugg.kg/sugg.w:1;
   const rows=en.sets.map(x=>{
     let prev,ph=null;
-    if(x.kind==='warmup'){ prev=lw[iw++]||null; ph=prev; }
+    if(x.kind==='warmup'){ prev=lw[iw++]||null; ph=prev&&wScale<1&&prev.kg>0?{...prev,kg:roundKg(prev.kg*wScale,en.unit)}:prev; }
     else {
       const i=inn++; prev=ln[i]||null;
       if(sugg){ const r=sugg.reps[Math.min(i,sugg.reps.length-1)]; ph={kg:sugg.kg,reps:r,secs:prev&&prev.secs,km:prev&&prev.km}; }
@@ -1486,6 +1654,14 @@ function renderTrain(main){
     m.append(e,document.createTextNode(` · ${st.sets}/${total} series`)); t.append(b,m);
     c.append(ic('timer','lg'),t,btn(desk?'Abrir':'Continuar',desk?'secondary':'',null,()=>nav('session',{sessionId:live.id}),desk?'chev-right':'play'));
     main.append(c);
+  }
+  if(!desk){
+    const on=deloadActive(), F=on?null:fatigueCheck();
+    if(on||F){
+      const n=el('div','desk-note'); n.style.background='var(--warn-bg)'; n.style.color='var(--warn-ink)'; n.style.borderColor='var(--warn-line)'; n.style.margin='0 0 12px'; n.style.alignItems='center';
+      const t=el('span','',on?`Semana de descarga · hasta el ${fmtDate(appState.settings.deloadUntil,{weekday:true})}`:'Señales de fatiga · ¿semana de descarga?'); t.style.flex='1';
+      n.append(ic('refresh'),t,on?btn('Terminar','small',null,endDeload):btn('Ver','small',null,()=>deloadSheet(F))); main.append(n);
+    }
   }
   const dup=importReview();
   if(dup.length){ const n=el('div','desk-note'); n.style.background='var(--warn-bg)'; n.style.color='var(--warn-ink)'; n.style.borderColor='var(--warn-line)'; n.style.margin='0 0 12px'; n.style.alignItems='center';
@@ -1675,7 +1851,7 @@ function askStart(r){
 }
 function startSession(r,mode){
   if(liveSession()){ askStart(r||{items:[],name:''}); return; }
-  const now=new Date(), s=normalizeSession({id:newId(),routineId:r?r.id:'',name:r?r.name:'Entrenamiento libre',date:ymd(now),startedAt:now.toISOString(),endedAt:'',mode,entries:[]});
+  const now=new Date(), light=!!r&&deloadActive(), s=normalizeSession({id:newId(),routineId:r?r.id:'',name:r?r.name:'Entrenamiento libre',date:ymd(now),startedAt:now.toISOString(),endedAt:'',mode,deload:light,entries:[]});
   if(r){
     const md=MODES.find(m=>m.k===mode)||MODES[0];
     /* Si la última vez cambiaste un ejercicio por su alternativa, se repite el cambio */
@@ -1683,18 +1859,18 @@ function startSession(r,mode){
     r.items.filter(i=>md.p.includes(i.prio)).forEach(it=>{
       const prevEn=prevRt&&prevRt.entries.find(en=>en.itemId===it.id);
       const exId=prevEn&&getEx(prevEn.exerciseId)?prevEn.exerciseId:it.exerciseId;
-      s.entries.push(newEntry(exId,it,r.id));
+      s.entries.push(newEntry(exId,it,r.id,light));
     });
     ui.lastMode[r.id]=mode;
   }
   commit(null,()=>{ appState.sessions.unshift(s); });
   nav('session',{sessionId:s.id});
 }
-function newEntry(exId,item,rtId){
+function newEntry(exId,item,rtId,light){
   const ex=getEx(exId), hs=exHistory(exId), last=(rtId&&hs.find(h=>h.s.routineId===rtId))||hs[0];
   const lastW=last?last.en.sets.filter(x=>x.done&&x.kind==='warmup').length:0;
   const lastN=last?last.en.sets.filter(x=>x.done&&x.kind!=='warmup').length:0;
-  const nw=item?(last?Math.min(lastW,3):item.warmup):Math.min(lastW,3), nn=item?item.sets:(lastN||3);
+  const nw=item?(last?Math.min(lastW,3):item.warmup):Math.min(lastW,3), nn=item?(light&&ex&&ex.type==='peso_reps'?deloadSets(item.sets):item.sets):(lastN||3);
   const sets=[]; for(let i=0;i<nw;i++) sets.push(normalizeSet({kind:'warmup'})); for(let i=0;i<nn;i++) sets.push(normalizeSet({}));
   return normalizeEntry({id:newId(),exerciseId:exId,itemId:item?item.id:'',unit:ex?ex.unit:'kg',sets});
 }
@@ -1724,6 +1900,15 @@ function renderSession(main){
       const b=el('button','ups-line'); b.type='button';
       b.append(ic(U.held.length?'shield':'trend'),el('span','',`${U.ups.length?`Hoy subes peso en ${pl(U.ups.length,'ejercicio','ejercicios')}`:'Hoy no subes peso'}${U.limit>0?` (máx. ${U.limit})`:''}${U.held.length?` · ${U.held.length} ${U.held.length===1?'espera':'esperan'} a la próxima`:''}`),ic('chev-right'));
       b.addEventListener('click',()=>upsSheet(U));
+      main.append(b);
+    }
+    const C=lightPlan(s);
+    if(C){
+      const b=el('button','ups-line light'); b.type='button';
+      const n=C.items.filter(x=>x.b.kind==='down'||x.b.kg<x.b.w).length;
+      const txt=s.deload?`Sesión de descarga · ${pl(n,'ejercicio','ejercicios')} con menos peso`:C.maxGap>=LAYOFF_MIN?`Vuelta tras ${fmtGap(C.maxGap)} · ${n?`${pl(n,'ejercicio','ejercicios')} con menos peso`:`sin subir en ${pl(C.items.length,'ejercicio','ejercicios')}`}`:`Recuperando peso en ${pl(C.items.length,'ejercicio','ejercicios')}`;
+      b.append(ic('refresh'),el('span','',txt),ic('chev-right'));
+      b.addEventListener('click',()=>lightSheet(s,C));
       main.append(b);
     }
   }
@@ -1905,7 +2090,7 @@ function painSheet(s,en){
 function suggBox(s,en,P){
   const sg=P.sugg, k=sg.kind, def=P.base?KIND_DIR[P.base.kind]:'same', dir=en.plan||def;
   const box=el('div','sugg-box k-'+k);
-  const t=el('div','sugg-t'); t.append(ic(sg.held?'shield':k==='up'?'trend':k==='up-reps'?'zap':k==='pain'?'alert':k==='down'?'arrow-down':'equal'),el('span','',sg.text||'')); box.append(t);
+  const t=el('div','sugg-t'); t.append(ic(sg.held?'shield':sg.ramp?'refresh':k==='up'?'trend':k==='up-reps'?'zap':k==='pain'?'alert':k==='down'?'arrow-down':'equal'),el('span','',sg.text||'')); box.append(t);
   if(sg.warn){ const w=el('div','sugg-t sugg-warn'); w.append(ic('alert'),el('span','',sg.warn)); box.append(w); }
   if(sg.w!=null){
     const c=el('div','sugg-c');
@@ -2085,7 +2270,7 @@ function swapSheet(s,en){
 }
 function addEntry(s,id){
   const rt=getRt(s.routineId), it=rt&&rt.items.find(i=>(i.exerciseId===id||i.alts.includes(id))&&!s.entries.some(e=>e.itemId===i.id));
-  const en=newEntry(id,it||null,s.routineId);
+  const en=newEntry(id,it||null,s.routineId,!!s.deload);
   commit(null,()=>{ s.entries.push(en); });
   const c=document.querySelector(`.ex-card[data-entry="${en.id}"]`); if(c) c.scrollIntoView({block:'start',behavior:'smooth'});
 }
@@ -2341,10 +2526,10 @@ function renderSessionDetail(main){
   main.append(pageHead(s.name,{back:goBack,actions:[btn('Editar','secondary',null,()=>nav('session',{sessionId:s.id}),'pencil'),more]}));
   const d=parseYMD(s.date);
   const when=dtf('full',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(d);
-  main.append(el('p','muted',`${when.charAt(0).toUpperCase()+when.slice(1)} · ${fmtTime(s.startedAt)}–${fmtTime(s.endedAt)}`));
+  main.append(el('p','muted',`${when.charAt(0).toUpperCase()+when.slice(1)} · ${fmtTime(s.startedAt)}–${fmtTime(s.endedAt)}${s.deload?' · Descarga':''}`));
   const st=sessionStats(s), recs=prData().bySession.get(s.id)||[];
   /* Comparación con la vez anterior de la misma rutina */
-  const prevS=s.routineId?finished().find(x=>x.routineId===s.routineId&&x.startedAt<s.startedAt):null;
+  const prevS=s.routineId?finished().find(x=>x.routineId===s.routineId&&!x.deload&&x.startedAt<s.startedAt):null;
   if(ui.justFinished===s.id&&Date.now()-tsOf(s.endedAt)<6*3600*1000){
     const bn=el('div','done-banner'); bn.append(ic(recs.length?'trophy':'check-circle'));
     const t=el('div'); t.append(el('b','',recs.length?`Sesión terminada · ${pl(recs.length,'récord','récords')}`:'Sesión terminada'));
@@ -3113,6 +3298,9 @@ function renderSettings(main){
   line(pr,'Subida de peso en lb',numIn(fmtNum(st.lbStep,2),v=>setSetting('lbStep',parseNum(v)??5),'decimal'));
   line(pr,'Máximo de ejercicios que suben peso en una sesión',numIn(st.maxUps,v=>{ setSetting('maxUps',parseInt(v,10)||0); renderApp(); }),'0 = sin límite');
   line(pr,'Zonas delicadas: una subida por zona',sw(st.zoneGuard,v=>setSetting('zoneGuard',v),'Proteger zonas delicadas'),'Lumbar, hombro y rodilla; ninguna tras una molestia en los últimos 7 días');
+  line(pr,'Vuelta tras un parón',sw(st.comeback,v=>setSetting('comeback',v),'Vuelta tras un parón'),'Menos peso a partir de 4 semanas');
+  line(pr,'Avisar de una semana de descarga',sw(st.deloadAlert,v=>setSetting('deloadAlert',v),'Aviso de semana de descarga'),'Con señales de fatiga');
+  if(!isDesk()) line(pr,'Semana de descarga',deloadActive()?btn('Terminar','secondary',null,endDeload):btn('Empezar','secondary',null,()=>deloadSheet(null),'play'),deloadActive()?`Hasta el ${fmtDate(st.deloadUntil,{weekday:true})}`:'');
 
   renderSyncSection(sec('refresh','Sincronización con el otro dispositivo'));
 
@@ -3165,6 +3353,18 @@ function renderHelp(main){
      ['«Bien»','significa lo previsto para ese ejercicio (el RIR de la rutina). Molestia pide la zona (lumbar, hombro…).'],
      ['La próxima vez','la caja de color propone qué hacer: subir peso (verde), más repeticiones (verde), repetir (azul) o bajar (ámbar). Las reglas: todas las series al tope y Fácil o Bien → subir; al tope pero Al límite → repetir; dentro del rango → una repetición más (dos si fue Fácil); por debajo del mínimo → repetir, y si se repite, bajar un 10 %; Molestia → nunca subir, bajar o usar la alternativa (con dos seguidas, te lo aconseja).'],
      ['Decidir tú','debajo de la propuesta están «Subir», «Mismo peso» y «Bajar»: tócalos y los valores en gris cambian.']]);
+  H('Vuelta tras un parón');
+  L([['Qué se mira:','hay parón si el músculo principal del ejercicio lleva 14 días o más sin trabajarse, en cualquier rutina: saltarte un día no lo es si ese músculo se trabaja en otra. Se cuenta el tiempo sin ese músculo o, si es mayor, sin ese ejercicio; así, una sesión suelta en vacaciones no borra el parón.'],
+     ['Qué propone:','de 14 a 27 días, no subir (repite el peso); de 4 a 5 semanas, un 10 % menos; de 6 a 11, un 20 % menos; con 12 semanas o más, un 30 % menos. Con mancuernas o máquinas de saltos grandes, el peso disponible más cercano; si un salto fuera casi media carga, repite el peso. Los calentamientos en gris bajan en la misma proporción.'],
+     ['Recuperar:','después sube hasta un 10 % cada vez que haces ese ejercicio, hasta el peso de antes (caja verde, «Recuperando»). Esas subidas no cuentan para el máximo por sesión. Si fue «Al límite» o no llegaste a las repeticiones, repite el peso; una molestia manda sobre todo lo demás.'],
+     ['Un ejercicio parado:','si el músculo ha seguido trabajando, pero llevas 3 semanas o más sin ese ejercicio (por ejemplo, porque usaste su alternativa), repite el peso antes de subir.'],
+     ['Decides tú:','cada propuesta se cambia con «Subir», «Mismo peso» y «Bajar». La línea de arriba de la sesión resume los cambios; púlsala y, con «Hoy, normal», la sesión usa las reglas de siempre (por ejemplo, si entrenaste fuera sin anotarlo).'],
+     ['Solo ejercicios con peso,','y dentro de una rutina. Se quita en Ajustes → Progresión → «Vuelta tras un parón». Los porcentajes son una regla prudente, no un dato exacto: hasta unas 4 semanas la fuerza apenas baja, pero tendones y articulaciones agradecen volver con calma.']]);
+  H('Semana de descarga');
+  L([['Cuándo aparece:','en «Entrenar», si en los últimos 14 días marcaste «Al límite» en un tercio o más de los ejercicios (mínimo 8), o si retrocediste (menos peso, o menos repeticiones con el mismo peso) en un tercio o más de los ejercicios comparados con la vez anterior (mínimo 6). No aparece hasta llevar 3 semanas seguidas de entrenamiento desde la última descarga o parón. Solo es una propuesta: «Ver» → «Empezar» o «Ahora no» (no vuelve a avisar en 14 días).'],
+     ['Qué cambia durante 7 días:','cada sesión de rutina empieza con el 60 % de las series (2 → 1, 3 → 2, 4 → 2) y un 10 % menos de peso, sin apurar; si un salto fuera demasiado grande para un peso ligero, repite el peso. Solo en los ejercicios con peso. La línea de arriba de la sesión tiene «Hoy, normal».'],
+     ['Después:','las sesiones de descarga no cuentan como referencia, así que la siguiente propuesta sale de tu peso normal. En el detalle de la sesión pone «Descarga».'],
+     ['Empezarla cuando quieras:','Ajustes → Progresión → «Semana de descarga» → «Empezar». El mismo botón la termina antes de tiempo. El aviso se quita en Ajustes → Progresión → «Avisar de una semana de descarga». La descarga se decide en el móvil: los ajustes no se sincronizan, pero las sesiones marcadas sí.']]);
   H('Plegar los ejercicios');
   L(['Toca la flecha a la izquierda del nombre para plegar o desplegar un ejercicio.',
      'Botón de compactar (arriba, junto a ⋯): solo queda desplegado el ejercicio actual; el que acabas de terminar sigue abierto hasta que marques cómo ha ido.']);
@@ -3894,7 +4094,7 @@ $('scrim').addEventListener('click',()=>closeSheet());
 try{ mqDesk.addEventListener('change',()=>renderApp({top:true})); }catch(e){}
 
 /* ================= Arranque ================= */
-window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,applyHevyImport,hashId,suggestFor,refFor,upPlan,planFor,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState,fingerprint,encryptState,decryptEnv,syncNow,save,commit,get syncCfg(){ return syncCfg; },syncRt};
+window.__migym={get state(){ return appState; },set state(v){ appState=v; },normalizeState,mergeStates,parseCSV,parseHevyDate,buildHevyImport,applyHevyImport,hashId,suggestFor,refFor,upPlan,planFor,lastLayoff,fatigueSignals,fatigueCheck,lightPlan,deloadActive,startDeload,toUnit,fromUnit,parseNum,parseSecs,exHistory,isPristine,blankState,fingerprint,encryptState,decryptEnv,syncNow,save,commit,get syncCfg(){ return syncCfg; },syncRt};
 (async function boot(){
   applyTheme();
   await bootStore();
