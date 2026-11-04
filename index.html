@@ -23,7 +23,7 @@
   --pE:#1c7a4f;--pI:#c99212;--pP:#8a93a5;--rt-bg:#f0ebfa;--rt-ink:#5b3fb0;
   --rc0:#2a78d6;--rc1:#eb6834;--rc2:#1baf7a;--rc3:#eda100;--rc4:#e87ba4;--rc5:#008300;--rc6:#6250d6;--rc7:#e34948;--hm-strong:#fff;
   --nav:#18223a;--nav-ink:#cdd4e4;--nav-muted:#8792ab;--nav-hover:rgba(255,255,255,.06);--nav-active:rgba(255,255,255,.12);
-  --head-bg:rgba(244,245,247,.94);--sidebar-w:232px;
+  --head-bg:rgba(244,245,247,.94);--sidebar-w:232px;--ex-shadow:0 1px 3px rgba(24,34,58,.08);
   --font:"Public Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 :root[data-theme=dark]{color-scheme:dark;
   --paper:#10141d;--panel:#181e2b;--field:#121722;--ink:#e4e8f1;--ink-2:#c3cad8;--muted:#a1a9ba;--faint:#727c94;--line:#272f42;--line-strong:#364056;
@@ -33,7 +33,7 @@
   --danger:#ff8a80;--danger-soft:#3a1c1e;--danger-line:#5c2a2d;--info-bg:#16283d;--info-ink:#8cc4f5;--info-line:#24476b;
   --pE:#3aa874;--pI:#d9ab35;--pP:#727c94;--rt-bg:#272040;--rt-ink:#c3b2ff;
   --rc0:#3987e5;--rc1:#d95926;--rc2:#199e70;--rc3:#c98500;--rc4:#d55181;--rc5:#008300;--rc6:#9085e9;--rc7:#e66767;--hm-strong:#10141d;
-  --nav:#0b0e15;--nav-hover:rgba(255,255,255,.05);--nav-active:rgba(255,255,255,.1);--head-bg:rgba(16,20,29,.92)}
+  --nav:#0b0e15;--nav-hover:rgba(255,255,255,.05);--nav-active:rgba(255,255,255,.1);--head-bg:rgba(16,20,29,.92);--ex-shadow:0 1px 3px rgba(0,0,0,.3)}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;font:15px/1.5 var(--font);background:var(--paper);color:var(--ink);overflow-x:hidden;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;min-height:100dvh}
@@ -132,7 +132,7 @@ main{padding:0 32px 120px;max-width:920px;width:100%;margin:0 auto}
 .sess-head .t{flex:1;min-width:0}
 .sess-head h1{font-size:1.2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sess-head .clock{font-size:.88rem;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap}
-.ex-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px 12px;margin-top:12px}
+.ex-card{background:var(--panel);border:1px solid var(--line-strong);box-shadow:var(--ex-shadow);border-radius:14px;padding:12px 14px 12px;margin-top:12px}
 .ex-top{display:flex;align-items:flex-start;gap:6px}
 .ex-name{flex:1;min-width:0;background:transparent;color:var(--ink);justify-content:flex-start;text-align:left;padding:4px 0;font-size:1.04rem;font-weight:700;min-height:0;display:block}
 .ex-name:hover{background:transparent;color:var(--accent-ink)}
