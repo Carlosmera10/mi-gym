@@ -18,7 +18,7 @@
   --paper:#f4f5f7;--panel:#fff;--ink:#18223a;--ink-2:#3b465c;--muted:#5b6579;--faint:#8a93a5;--line:#e1e5ec;--line-strong:#cbd2de;
   --accent:#c2410c;--accent-ink:#9a3412;--accent-soft:#fff1e8;--accent-line:#f5c4a5;
   --field:#fff;--hover:#f2f4f8;--chip:#eef1f6;--chip-ink:#3c475d;--subtle:#f8f9fb;--sunken:#eceff4;--track:#e3e7ee;
-  --done:#1c7a4f;--done-soft:#e6f3ec;--done-line:#a9d6bd;--warn:#a45200;--warn-bg:#fff8ec;--warn-line:#f0d6a8;--warn-ink:#6e4500;
+  --done:#1c7a4f;--done-soft:#e6f3ec;--done-line:#a9d6bd;--done-card:#d3efde;--warn:#a45200;--warn-bg:#fff8ec;--warn-line:#f0d6a8;--warn-ink:#6e4500;
   --danger:#b42318;--danger-soft:#fdf0ee;--danger-line:#efc7c2;--info-bg:#e6f1fb;--info-ink:#1d5f99;--info-line:#bcd8f2;
   --pE:#1c7a4f;--pI:#c99212;--pP:#8a93a5;--rt-bg:#f0ebfa;--rt-ink:#5b3fb0;
   --rc0:#2a78d6;--rc1:#eb6834;--rc2:#1baf7a;--rc3:#eda100;--rc4:#e87ba4;--rc5:#008300;--rc6:#6250d6;--rc7:#e34948;--hm-strong:#fff;
@@ -29,7 +29,7 @@
   --paper:#10141d;--panel:#181e2b;--field:#121722;--ink:#e4e8f1;--ink-2:#c3cad8;--muted:#a1a9ba;--faint:#727c94;--line:#272f42;--line-strong:#364056;
   --accent:#f0773a;--accent-ink:#ff9a62;--accent-soft:#33200f;--accent-line:#6b3a1c;
   --hover:#222a3b;--chip:#242c3e;--chip-ink:#c3cad8;--subtle:#151a26;--sunken:#121722;--track:#2a3246;
-  --done:#3aa874;--done-soft:#14291f;--done-line:#245c40;--warn:#f0a24e;--warn-bg:#2b2113;--warn-line:#5a4220;--warn-ink:#f3d29b;
+  --done:#3aa874;--done-soft:#14291f;--done-line:#245c40;--done-card:#173826;--warn:#f0a24e;--warn-bg:#2b2113;--warn-line:#5a4220;--warn-ink:#f3d29b;
   --danger:#ff8a80;--danger-soft:#3a1c1e;--danger-line:#5c2a2d;--info-bg:#16283d;--info-ink:#8cc4f5;--info-line:#24476b;
   --pE:#3aa874;--pI:#d9ab35;--pP:#727c94;--rt-bg:#272040;--rt-ink:#c3b2ff;
   --rc0:#3987e5;--rc1:#d95926;--rc2:#199e70;--rc3:#c98500;--rc4:#d55181;--rc5:#008300;--rc6:#9085e9;--rc7:#e66767;--hm-strong:#10141d;
@@ -386,6 +386,10 @@ button.nl:hover{background:var(--hover)}
 .mini-feel{color:var(--muted);display:inline-flex}
 .done-ic{color:var(--done)}
 .ex-card.mini.complete{background:var(--subtle)}
+/* Recién valorado: verde claro durante los 2 s antes de plegarse */
+.ex-card.just-done{background:var(--done-card);border-color:var(--done);box-shadow:0 0 0 1px var(--done),var(--ex-shadow);animation:doneIn .25s ease-out}
+.ex-card.just-done .ex-note,.ex-card.just-done .feel{border-color:var(--done-line)}
+@keyframes doneIn{from{background:var(--panel);border-color:var(--line-strong);box-shadow:var(--ex-shadow)}}
 .fold-btn{margin:-2px 0 0 -6px;color:var(--faint)}
 .on-focus{color:var(--accent);background:var(--accent-soft)}
 .pr-n{display:inline-flex;align-items:center;gap:3px;color:var(--warn);font-weight:700}
@@ -1934,7 +1938,7 @@ function renderSession(main){
 function entryCard(s,en,idx){
   const live=!s.endedAt, P=planFor(s,en), ex=P.ex, item=P.item, unit=en.unit;
   if(!isOpen(s,en)) return miniCard(s,en,P);
-  const card=el('section','ex-card'); card.dataset.entry=en.id;
+  const card=el('section','ex-card'+(doneFor===en.id?' just-done':'')); card.dataset.entry=en.id;
   const top=el('div','ex-top');
   top.append(btn('','ghost icon small fold-btn','Plegar el ejercicio',()=>setOpen(s,en,false),'chev-down'));
   const name=btn(ex.name,'ex-name','Ver la técnica',()=>techSheet(ex));
@@ -2049,6 +2053,9 @@ function toggleDone(s,en,x,ph){
     if(!s.endedAt) livePR(ex,en,x);
   } else x.done=false;
   dataRev++; clearTimeout(saveTimer); saveTimer=null; save();
+  /* Ya valorado y acabas de marcar la última serie: también cuenta como terminado */
+  if(!s.endedAt&&!wasDone&&entryDone(en)&&rated(en)) armDone(s,en);
+  else if(doneFor===en.id&&!entryDone(en)) cancelDone();
   if(ui.focus&&!s.endedAt&&wasDone!==entryDone(en)) renderApp(); else refreshCard(s,en);
   if(goPair) requestAnimationFrame(()=>{ const r=document.querySelector(`[data-set="${goPair.id}"]`); if(r) r.scrollIntoView({behavior:reducedMotion()?'auto':'smooth',block:'center'}); });
 }
@@ -2057,12 +2064,40 @@ const entryDone=en=>{ const w=en.sets.filter(x=>x.kind!=='warmup'); return w.len
 function currentEntryId(s){ const e=s.entries.find(en=>en.sets.some(x=>!x.done)); return e?e.id:''; }
 function isOpen(s,en){
   if(ui.openFor!==s.id){ ui.openFor=s.id; ui.openEntries={}; ui.lastTouched=''; }
+  if(doneFor===en.id) return true;
   const o=ui.openEntries[en.id]; if(o===true||o===false) return o;
   if(!ui.focus||s.endedAt) return true;
   const pa=partnerOf(s,en);
   return en.id===currentEntryId(s)||(!!pa&&pa.id===currentEntryId(s))||(en.id===ui.lastTouched&&!en.feel&&!en.pain&&!s.endedAt);
 }
-function setOpen(s,en,v){ ui.openEntries[en.id]=v; saveUI(); renderApp(); }
+function setOpen(s,en,v){ if(!v&&doneFor===en.id){ fireDone(s.id,en.id,true); return; } ui.openEntries[en.id]=v; saveUI(); renderApp(); }
+/* ---- Ejercicio terminado y valorado: verde, se pliega a los 2 s y pasa al primero pendiente; si no queda ninguno, propone terminar ---- */
+const DONE_MS=2000;
+let doneTimer=null, doneFor='';
+const rated=en=>!!(en.feel||en.pain);
+function armDone(s,en){ clearTimeout(doneTimer); doneFor=en.id; doneTimer=setTimeout(()=>fireDone(s.id,en.id),DONE_MS); }
+function cancelDone(){ clearTimeout(doneTimer); doneTimer=null; doneFor=''; }
+function fireDone(sid,eid,now=false){
+  clearTimeout(doneTimer); doneTimer=null;
+  const s=getSess(sid), en=s&&s.entries.find(e=>e.id===eid);
+  if(doneFor!==eid) return;
+  if(!s||s.endedAt||!en||!entryDone(en)||!rated(en)){ doneFor=''; if(s&&ui.view==='session') renderApp(); return; }
+  /* Escribiendo la nota del ejercicio o en otro sitio, con una hoja abierta o arrastrando: espera.
+     Un campo de las series de este mismo ejercicio no lo impide (p. ej. tras «Intro» en la última serie). */
+  const a=document.activeElement, card=document.querySelector(`.ex-card[data-entry="${eid}"]`);
+  const inOwnSet=!!(a&&a.tagName==='INPUT'&&card&&card.contains(a));
+  if(!now&&(sheetOpen||dnd||(isTyping()&&!inOwnSet))){ doneTimer=setTimeout(()=>fireDone(sid,eid),800); return; }
+  if(inOwnSet) a.blur();
+  doneFor='';
+  ui.openEntries[eid]=false;
+  const next=s.entries.find(e=>e!==en&&!entryDone(e));
+  if(next) ui.openEntries[next.id]=true;
+  saveUI();
+  if(ui.view!=='session'||ui.sessionId!==sid) return;
+  renderApp();
+  if(next) scrollToEntry(next.id);
+  else if(s.entries.every(entryDone)) askFinish(s,{all:true});
+}
 function toggleFocus(){ ui.focus=!ui.focus; ui.openEntries={}; saveUI(); renderApp(); const s=liveSession(); if(ui.focus&&s) scrollToEntry(currentEntryId(s)); }
 function scrollToEntry(id){ if(!id) return; requestAnimationFrame(()=>{ const c=document.querySelector(`.ex-card[data-entry="${id}"]`); if(c) c.scrollIntoView({behavior:reducedMotion()?'auto':'smooth',block:'start'}); }); }
 const reducedMotion=()=>!!(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -2095,6 +2130,8 @@ function feelRow(s,en){
 }
 function setFeel(s,en,feel,pain=en.pain){
   en.feel=feel; en.pain=pain; dataRev++; save();
+  if(!s.endedAt&&entryDone(en)&&rated(en)){ armDone(s,en); refreshCard(s,en); return; }
+  if(doneFor===en.id) cancelDone();
   if(ui.focus&&!s.endedAt){ renderApp(); scrollToEntry(currentEntryId(s)); } else refreshCard(s,en);
 }
 function painSheet(s,en){
@@ -2428,7 +2465,7 @@ function timeSheet(s){
     closeSheet(); commit('📅 Fecha cambiada',()=>{ s.startedAt=a.toISOString(); s.date=ymd(a); if(b) s.endedAt=b.toISOString(); appState.sessions.sort((x,y)=>y.startedAt.localeCompare(x.startedAt)); });
   })]});
 }
-function askFinish(s){
+function askFinish(s,{all=false}={}){
   flushSave();
   const st=sessionStats(s), pending=s.entries.reduce((n,en)=>n+en.sets.filter(x=>!x.done).length,0);
   const c=el('div');
@@ -2440,7 +2477,7 @@ function askFinish(s){
     return;
   }
   if(pending) c.append(el('p','muted',`${pl(pending,'serie sin marcar se descartará','series sin marcar se descartarán')}.`));
-  openSheet('Terminar sesión',c,{actions:[btn('Seguir entrenando','secondary',null,()=>closeSheet()),btn('Terminar','',null,()=>{ closeSheet(); finishSession(s); },'check')]});
+  openSheet(all?'Ejercicios terminados':'Terminar sesión',c,{actions:[btn('Seguir entrenando','secondary',null,()=>closeSheet()),btn('Terminar','',null,()=>{ closeSheet(); finishSession(s); },'check')]});
 }
 function finishSession(s){
   commit('✅ Sesión guardada',()=>{
@@ -3503,7 +3540,9 @@ function renderHelp(main){
      ['Empezarla cuando quieras:','Ajustes → Progresión → «Semana de descarga» → «Empezar». El mismo botón la termina antes de tiempo. El aviso se quita en Ajustes → Progresión → «Avisar de una semana de descarga». La descarga se decide en el móvil: los ajustes no se sincronizan, pero las sesiones marcadas sí.']]);
   H('Plegar los ejercicios');
   L(['Toca la flecha a la izquierda del nombre para plegar o desplegar un ejercicio.',
-     'Botón de compactar (arriba, junto a ⋯): solo queda desplegado el ejercicio actual; el que acabas de terminar sigue abierto hasta que marques cómo ha ido.']);
+     'Botón de compactar (arriba, junto a ⋯): solo queda desplegado el ejercicio actual; el que acabas de terminar sigue abierto hasta que marques cómo ha ido.',
+     'Al marcar cómo ha ido un ejercicio con todas sus series hechas (o al marcar la última serie si ya lo habías valorado), la tarjeta se pone verde, se pliega a los 2 segundos y se abre el primer ejercicio pendiente según el orden de la sesión. Si en esos 2 segundos cambias la valoración, vuelve a contar; si la quitas, no se pliega. Si estás escribiendo la nota del ejercicio, espera a que termines.',
+     'Cuando no queda ningún ejercicio pendiente, se abre directamente «Terminar sesión».']);
   H('Récords');
   L(['Al marcar una serie que supera tu mejor marca aparece un aviso con una copa (peso, 1RM estimado o mejor serie).',
      'Al terminar verás el resumen con los récords de la sesión y la comparación con la última vez. En el historial, la copa indica cuántos récords tiene cada sesión.',
