@@ -385,10 +385,11 @@ button.nl:hover{background:var(--hover)}
 .mini-n{font-size:.8rem;font-weight:700;color:var(--muted);background:var(--sunken);border-radius:99px;padding:1px 8px}
 .mini-feel{color:var(--muted);display:inline-flex}
 .done-ic{color:var(--done)}
-.ex-card.mini.complete{background:var(--subtle)}
-/* Recién valorado: verde claro durante los 2 s antes de plegarse */
-.ex-card.just-done{background:var(--done-card);border-color:var(--done);box-shadow:0 0 0 1px var(--done),var(--ex-shadow);animation:doneIn .25s ease-out}
-.ex-card.just-done .ex-note,.ex-card.just-done .feel{border-color:var(--done-line)}
+/* Ejercicio terminado: verde claro, plegado o desplegado (y con una entrada suave al valorarlo) */
+.ex-card.mini.complete,.ex-card.is-done{background:var(--done-card);border-color:var(--done);box-shadow:0 0 0 1px var(--done),var(--ex-shadow)}
+.ex-card.mini.complete .mini-h:hover{background:transparent}
+.ex-card.just-done{animation:doneIn .25s ease-out}
+.ex-card.is-done .ex-note,.ex-card.is-done .feel{border-color:var(--done-line)}
 @keyframes doneIn{from{background:var(--panel);border-color:var(--line-strong);box-shadow:var(--ex-shadow)}}
 .fold-btn{margin:-2px 0 0 -6px;color:var(--faint)}
 .on-focus{color:var(--accent);background:var(--accent-soft)}
@@ -1938,7 +1939,7 @@ function renderSession(main){
 function entryCard(s,en,idx){
   const live=!s.endedAt, P=planFor(s,en), ex=P.ex, item=P.item, unit=en.unit;
   if(!isOpen(s,en)) return miniCard(s,en,P);
-  const card=el('section','ex-card'+(doneFor===en.id?' just-done':'')); card.dataset.entry=en.id;
+  const card=el('section','ex-card'+(doneFor===en.id?' is-done just-done':live&&entryDone(en)&&rated(en)?' is-done':'')); card.dataset.entry=en.id;
   const top=el('div','ex-top');
   top.append(btn('','ghost icon small fold-btn','Plegar el ejercicio',()=>setOpen(s,en,false),'chev-down'));
   const name=btn(ex.name,'ex-name','Ver la técnica',()=>techSheet(ex));
@@ -3541,7 +3542,7 @@ function renderHelp(main){
   H('Plegar los ejercicios');
   L(['Toca la flecha a la izquierda del nombre para plegar o desplegar un ejercicio.',
      'Botón de compactar (arriba, junto a ⋯): solo queda desplegado el ejercicio actual; el que acabas de terminar sigue abierto hasta que marques cómo ha ido.',
-     'Al marcar cómo ha ido un ejercicio con todas sus series hechas (o al marcar la última serie si ya lo habías valorado), la tarjeta se pone verde, se pliega a los 2 segundos y se abre el primer ejercicio pendiente según el orden de la sesión. Si en esos 2 segundos cambias la valoración, vuelve a contar; si la quitas, no se pliega. Si estás escribiendo la nota del ejercicio, espera a que termines.',
+     'Al marcar cómo ha ido un ejercicio con todas sus series hechas (o al marcar la última serie si ya lo habías valorado), la tarjeta se pone verde y se queda así; se pliega a los 2 segundos y se abre el primer ejercicio pendiente según el orden de la sesión. Si en esos 2 segundos cambias la valoración, vuelve a contar; si la quitas, no se pliega. Si estás escribiendo la nota del ejercicio, espera a que termines.',
      'Cuando no queda ningún ejercicio pendiente, se abre directamente «Terminar sesión».']);
   H('Récords');
   L(['Al marcar una serie que supera tu mejor marca aparece un aviso con una copa (peso, 1RM estimado o mejor serie).',
